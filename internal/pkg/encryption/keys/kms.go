@@ -13,9 +13,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/siderolabs/go-blockdevice/blockdevice/encryption"
-	"github.com/siderolabs/go-blockdevice/blockdevice/encryption/luks"
-	"github.com/siderolabs/go-blockdevice/blockdevice/encryption/token"
+	"github.com/siderolabs/go-blockdevice/v2/encryption"
+	"github.com/siderolabs/go-blockdevice/v2/encryption/luks"
+	"github.com/siderolabs/go-blockdevice/v2/encryption/token"
 	"github.com/siderolabs/kms-client/api/kms"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -23,6 +23,7 @@ import (
 
 	"github.com/siderolabs/talos/internal/pkg/encryption/helpers"
 	"github.com/siderolabs/talos/internal/pkg/endpoint"
+	"github.com/siderolabs/talos/pkg/httpdefaults"
 )
 
 // KMSToken is the userdata stored in the partition token metadata.
@@ -130,7 +131,9 @@ func (h *KMSKeyHandler) getConn() (*grpc.ClientConn, error) {
 	if endpoint.Insecure {
 		transportCredentials = insecure.NewCredentials()
 	} else {
-		transportCredentials = credentials.NewTLS(&tls.Config{})
+		transportCredentials = credentials.NewTLS(&tls.Config{
+			RootCAs: httpdefaults.RootCAs(),
+		})
 	}
 
 	return grpc.NewClient(

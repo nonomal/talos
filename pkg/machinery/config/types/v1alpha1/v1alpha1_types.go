@@ -30,7 +30,6 @@ import (
 
 	"github.com/dustin/go-humanize"
 	"github.com/siderolabs/crypto/x509"
-	"github.com/siderolabs/go-blockdevice/blockdevice/util/disk"
 	"gopkg.in/yaml.v3"
 
 	"github.com/siderolabs/talos/pkg/machinery/config/config"
@@ -291,6 +290,18 @@ type MachineConfig struct {
 	//    - value: machineSeccompExample()
 	MachineSeccompProfiles []*MachineSeccompProfile `yaml:"seccompProfiles,omitempty" talos:"omitonlyifnil"`
 	//  description: |
+	//    Override (patch) settings in the default OCI runtime spec for CRI containers.
+	//
+	//    It can be used to set some default container settings which are not configurable in Kubernetes,
+	//    for example default ulimits.
+	//    Note: this change applies to all newly created containers, and it requires a reboot to take effect.
+	//  examples:
+	//    - name: override default open file limit
+	//      value: machineBaseRuntimeSpecOverridesExample()
+	//  schema:
+	//    type: object
+	MachineBaseRuntimeSpecOverrides Unstructured `yaml:"baseRuntimeSpecOverrides,omitempty"`
+	//  description: |
 	//    Configures the node labels for the machine.
 	//
 	//    Note: In the default Kubernetes configuration, worker nodes are restricted to set
@@ -299,6 +310,12 @@ type MachineConfig struct {
 	//    - name: node labels example.
 	//      value: 'map[string]string{"exampleLabel": "exampleLabelValue"}'
 	MachineNodeLabels map[string]string `yaml:"nodeLabels,omitempty"`
+	//  description: |
+	//    Configures the node annotations for the machine.
+	//  examples:
+	//    - name: node annotations example.
+	//      value: 'map[string]string{"customer.io/rack": "r13a25"}'
+	MachineNodeAnnotations map[string]string `yaml:"nodeAnnotations,omitempty"`
 	//  description: |
 	//    Configures the node taints for the machine. Effect is optional.
 	//
@@ -699,6 +716,11 @@ type NetworkConfig struct {
 	//     - value: '[]string{"8.8.8.8", "1.1.1.1"}'
 	NameServers []string `yaml:"nameservers,omitempty"`
 	//   description: |
+	//     Used to statically set arbitrary search domains.
+	//   examples:
+	//     - value: '[]string{"example.org", "example.com"}'
+	Searches []string `yaml:"searchDomains,omitempty"`
+	//   description: |
 	//     Allows for extra entries to be added to the `/etc/hosts` file
 	//   examples:
 	//     - value: networkConfigExtraHostsExample()
@@ -873,11 +895,6 @@ func (m *InstallDiskSizeMatcher) UnmarshalYAML(unmarshal func(any) error) error 
 	return nil
 }
 
-// Matcher is a method that can handle some custom disk matching logic.
-func (m *InstallDiskSizeMatcher) Matcher(d *disk.Disk) bool {
-	return m.MatchData.Compare(d)
-}
-
 // InstallDiskSizeMatchData contains data for comparison - Op and Size.
 //
 //docgen:nodoc
@@ -886,53 +903,8 @@ type InstallDiskSizeMatchData struct {
 	Size uint64
 }
 
-// Compare is the method to compare disk size.
-func (in *InstallDiskSizeMatchData) Compare(d *disk.Disk) bool {
-	switch in.Op {
-	case ">=":
-		return d.Size >= in.Size
-	case "<=":
-		return d.Size <= in.Size
-	case ">":
-		return d.Size > in.Size
-	case "<":
-		return d.Size < in.Size
-	case "":
-		fallthrough
-	case "==":
-		return d.Size == in.Size
-	default:
-		return false
-	}
-}
-
 // InstallDiskType custom type for disk type selector.
-type InstallDiskType disk.Type
-
-// MarshalYAML is a custom marshaller for `InstallDiskSizeMatcher`.
-func (it InstallDiskType) MarshalYAML() (any, error) {
-	return disk.Type(it).String(), nil
-}
-
-// UnmarshalYAML is a custom unmarshaler for `InstallDiskType`.
-func (it *InstallDiskType) UnmarshalYAML(unmarshal func(any) error) error {
-	var (
-		t   string
-		err error
-	)
-
-	if err = unmarshal(&t); err != nil {
-		return err
-	}
-
-	if dt, err := disk.ParseType(t); err == nil {
-		*it = InstallDiskType(dt)
-	} else {
-		return err
-	}
-
-	return nil
-}
+type InstallDiskType string
 
 // InstallDiskSelector represents a disk query parameters for the install disk lookup.
 type InstallDiskSelector struct {
@@ -966,7 +938,8 @@ type InstallDiskSelector struct {
 	//     - nvme
 	//     - sd
 	Type InstallDiskType `yaml:"type,omitempty"`
-	//   description: Disk bus path.
+	//   description: |
+	//      Disk bus path.
 	//   examples:
 	//     - value: '"/pci0000:00/0000:00:17.0/ata1/host0/target0:0:0/0:0:0:0"'
 	//     - value: '"/pci0000:00/*"'
@@ -1170,6 +1143,11 @@ type APIServerConfig struct {
 	//   schema:
 	//     type: object
 	ResourcesConfig *ResourcesConfig `yaml:"resources,omitempty"`
+	//   description: |
+	//     Configure the API server authorization config. Node and RBAC authorizers are always added irrespective of the configuration.
+	//   examples:
+	//     - value: authorizationConfigExample()
+	AuthorizationConfigConfig AuthorizationConfigAuthorizerConfigList `yaml:"authorizationConfig,omitempty"`
 }
 
 // AdmissionPluginConfigList represents the admission plugin configuration list.
@@ -1225,6 +1203,26 @@ type AdmissionPluginConfig struct {
 	//   schema:
 	//     type: object
 	PluginConfiguration Unstructured `yaml:"configuration"`
+}
+
+// AuthorizationConfigAuthorizerConfigList represents the authorization config authorizer configuration list.
+//
+//docgen:alias
+type AuthorizationConfigAuthorizerConfigList []*AuthorizationConfigAuthorizerConfig
+
+// AuthorizationConfigAuthorizerConfig represents the API server authorization config authorizer configuration.
+type AuthorizationConfigAuthorizerConfig struct {
+	//   description: |
+	//     Type is the name of the authorizer. Allowed values are `Node`, `RBAC`, and `Webhook`.
+	AuthorizerType string `yaml:"type"`
+	//   description: |
+	//     Name is used to describe the authorizer.
+	AuthorizerName string `yaml:"name"`
+	//   description: |
+	//     webhook is the configuration for the webhook authorizer.
+	//   schema:
+	//     type: object
+	AuthorizerWebhook Unstructured `yaml:"webhook,omitempty"`
 }
 
 var _ config.ControllerManager = (*ControllerManagerConfig)(nil)
@@ -1741,6 +1739,12 @@ type Device struct {
 	//   examples:
 	//     - value: networkConfigBridgeExample()
 	DeviceBridge *Bridge `yaml:"bridge,omitempty"`
+	//   description: |
+	//     Configure this device as a bridge port.
+	//     This can be used to dynamically assign network interfaces to a bridge.
+	//   examples:
+	//     - value: networkConfigDynamicBridgePortsExample()
+	DeviceBridgePort *BridgePort `yaml:"bridgePort,omitempty"`
 	//   description: VLAN specific options.
 	DeviceVlans VlanList `yaml:"vlans,omitempty"`
 	//   description: |
@@ -1991,13 +1995,19 @@ type Bridge struct {
 	//   description: The interfaces that make up the bridge.
 	BridgedInterfaces []string `yaml:"interfaces"`
 	//   description: |
-	//     A bridge option.
+	//     Enable STP on this bridge.
 	//     Please see the official kernel documentation.
 	BridgeSTP *STP `yaml:"stp,omitempty"`
 	//   description: |
-	//     A bridge option.
+	//     Enable VLAN-awareness on this bridge.
 	//     Please see the official kernel documentation.
 	BridgeVLAN *BridgeVLAN `yaml:"vlan,omitempty"`
+}
+
+// BridgePort contains settings for assigning a link to a bridge interface.
+type BridgePort struct {
+	//   description: The name of the bridge master interface
+	BridgePortMaster string `yaml:"master,omitempty"`
 }
 
 // VlanList is a list of *Vlan structures with overridden merge process.
@@ -2089,6 +2099,10 @@ type RegistryMirrorConfig struct {
 	//     This setting is often required for setting up multiple mirrors
 	//     on a single instance of a registry.
 	MirrorOverridePath *bool `yaml:"overridePath,omitempty"`
+	//   description: |
+	//     Skip fallback to the upstream endpoint, for example the mirror configuration
+	//     for `docker.io` will not fallback to `registry-1.docker.io`.
+	MirrorSkipFallback *bool `yaml:"skipFallback,omitempty"`
 }
 
 // RegistryConfig specifies auth & TLS config per registry.
@@ -2195,6 +2209,15 @@ type FeaturesConfig struct {
 	//   description: |
 	//     Configures host DNS caching resolver.
 	HostDNSSupport *HostDNSConfig `yaml:"hostDNS,omitempty"`
+	//   description: |
+	//     Enable Image Cache feature.
+	ImageCacheSupport *ImageCacheConfig `yaml:"imageCache,omitempty"`
+	//   description: |
+	//     Select the node address sort algorithm.
+	//     The 'v1' algorithm sorts addresses by the address itself.
+	//     The 'v2' algorithm prefers more specific prefixes.
+	//     If unset, defaults to 'v1'.
+	FeatureNodeAddressSortAlgorithm string `yaml:"nodeAddressSortAlgorithm,omitempty"`
 }
 
 // KubePrism describes the configuration for the KubePrism load balancer.
@@ -2205,6 +2228,13 @@ type KubePrism struct {
 	//   description: |
 	//     KubePrism port.
 	ServerPort int `yaml:"port,omitempty"`
+}
+
+// ImageCacheConfig describes the configuration for the Image Cache feature.
+type ImageCacheConfig struct {
+	//   description: |
+	//     Enable local image cache.
+	CacheLocalEnabled *bool `yaml:"localEnabled,omitempty"`
 }
 
 // KubernetesTalosAPIAccessConfig describes the configuration for the Talos API access from Kubernetes pods.
@@ -2352,8 +2382,13 @@ type KubeSpanFilters struct {
 type NetworkDeviceSelector struct {
 	// description: PCI, USB bus prefix, supports matching by wildcard.
 	NetworkDeviceBus string `yaml:"busPath,omitempty"`
-	// description: Device hardware address, supports matching by wildcard.
+	// description: Device hardware (MAC) address, supports matching by wildcard.
 	NetworkDeviceHardwareAddress string `yaml:"hardwareAddr,omitempty"`
+	// description: |
+	//    Device permanent hardware address, supports matching by wildcard.
+	//    The permanent address doesn't change when the link is enslaved to a bond,
+	//    so it's recommended to use this field for bond members.
+	NetworkDevicePermanentAddress string `yaml:"permanentAddr,omitempty"`
 	// description: PCI ID (vendor ID, product ID), supports matching by wildcard.
 	NetworkDevicePCIID string `yaml:"pciID,omitempty"`
 	// description: Kernel driver, supports matching by wildcard.
@@ -2378,6 +2413,9 @@ type DiscoveryRegistriesConfig struct {
 	// description: |
 	//   Kubernetes registry uses Kubernetes API server to discover cluster members and stores additional information
 	//   as annotations on the Node resources.
+	//
+	//   This feature is deprecated as it is not compatible with Kubernetes 1.32+.
+	//   See https://github.com/siderolabs/talos/issues/9980 for more information.
 	RegistryKubernetes RegistryKubernetesConfig `yaml:"kubernetes"`
 	// description: |
 	//   Service registry is using an external service to push and pull information about cluster members.

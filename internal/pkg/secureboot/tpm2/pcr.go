@@ -16,7 +16,8 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/siderolabs/talos/internal/pkg/secureboot"
+	"github.com/siderolabs/talos/internal/pkg/tpm"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 
 // CreateSelector converts PCR  numbers into a bitmask.
@@ -62,9 +63,9 @@ func ReadPCR(t transport.TPM, pcr int) ([]byte, error) {
 	return pcrValue.PCRValues.Digests[0].Buffer, nil
 }
 
-// PCRExtent hashes the input and extends the PCR with the hash.
-func PCRExtent(pcr int, data []byte) error {
-	t, err := transport.OpenTPM()
+// PCRExtend hashes the input and extends the PCR with the hash.
+func PCRExtend(pcr int, data []byte) error {
+	t, err := tpm.Open()
 	if err != nil {
 		// if the TPM is not available or not a TPM 2.0, we can skip the PCR extension
 		if os.IsNotExist(err) || strings.Contains(err.Error(), "device is not a TPM 2.0") {
@@ -128,21 +129,21 @@ func PolicyPCRDigest(t transport.TPM, policyHandle tpm2.TPMHandle, pcrSelection 
 
 //nolint:gocyclo
 func validatePCRBanks(t transport.TPM) error {
-	pcrValue, err := ReadPCR(t, secureboot.UKIPCR)
+	pcrValue, err := ReadPCR(t, constants.UKIPCR)
 	if err != nil {
 		return fmt.Errorf("failed to read PCR: %w", err)
 	}
 
-	if err = validatePCRNotZeroAndNotFilled(pcrValue, secureboot.UKIPCR); err != nil {
+	if err = validatePCRNotZeroAndNotFilled(pcrValue, constants.UKIPCR); err != nil {
 		return err
 	}
 
-	pcrValue, err = ReadPCR(t, secureboot.SecureBootStatePCR)
+	pcrValue, err = ReadPCR(t, SecureBootStatePCR)
 	if err != nil {
 		return fmt.Errorf("failed to read PCR: %w", err)
 	}
 
-	if err = validatePCRNotZeroAndNotFilled(pcrValue, secureboot.SecureBootStatePCR); err != nil {
+	if err = validatePCRNotZeroAndNotFilled(pcrValue, SecureBootStatePCR); err != nil {
 		return err
 	}
 

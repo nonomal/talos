@@ -1,6 +1,6 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED, PLEASE DO NOT EDIT.
 #
-# Generated on 2024-05-27T16:20:10Z by kres bcb280a.
+# Generated on 2024-11-28T12:57:52Z by kres 232fe63.
 
 name: integration-qemu-encrypted-vip-cron
 concurrency:
@@ -62,6 +62,10 @@ jobs:
         if: github.event_name != 'schedule'
         run: |
           xargs -a _out/executable-artifacts -I {} chmod +x {}
+      - name: ci-temp-release-tag
+        if: github.event_name != 'schedule'
+        run: |
+          make ci-temp-release-tag
       - name: build
         if: github.event_name == 'schedule'
         env:
@@ -77,6 +81,10 @@ jobs:
       - name: e2e-qemu
         env:
           IMAGE_REGISTRY: registry.dev.siderolabs.io
+          QEMU_EXTRA_DISKS: "3"
+          QEMU_EXTRA_DISKS_DRIVERS: ide,nvme
+          QEMU_EXTRA_DISKS_SIZE: "10240"
+          WITH_CONFIG_PATCH_WORKER: '@hack/test/patches/ephemeral-nvme.yaml:@hack/test/patches/dm-raid-module.yaml'
           WITH_DISK_ENCRYPTION: "true"
           WITH_KUBESPAN: "true"
           WITH_VIRTUAL_IP: "true"
@@ -88,6 +96,6 @@ jobs:
         with:
           name: talos-logs-integration-qemu-encrypted-vip
           path: |-
-            ~/.talos/clusters/**/*.log
-            !~/.talos/clusters/**/swtpm.log
+            /tmp/logs-*.tar.gz
+            /tmp/support-*.zip
           retention-days: "5"

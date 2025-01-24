@@ -201,6 +201,7 @@ func (i *inspector) buildPod(sandbox *runtimeapi.PodSandbox) (*ctrs.Pod, error) 
 				Display:      podName,
 				Name:         podName,
 				ID:           sandbox.Id,
+				UID:          sandbox.Metadata.Uid,
 				PodName:      podName,
 				Status:       sandboxStatus.State.String(),
 				IsPodSandbox: true,
@@ -286,11 +287,7 @@ func (i *inspector) buildContainer(container *runtimeapi.Container) (*ctrs.Conta
 }
 
 func safeCut(id string, i int) string {
-	if len(id) > i {
-		return id[:i]
-	}
-
-	return id
+	return id[:min(i, len(id))]
 }
 
 // Pods collects information about running pods & containers.

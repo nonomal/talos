@@ -20,7 +20,7 @@ import (
 	talosruntime "github.com/siderolabs/talos/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/internal/app/machined/pkg/runtime/v1alpha1/board"
 	"github.com/siderolabs/talos/internal/app/machined/pkg/runtime/v1alpha1/platform"
-	"github.com/siderolabs/talos/internal/pkg/secureboot/uki"
+	"github.com/siderolabs/talos/internal/pkg/uki"
 	"github.com/siderolabs/talos/pkg/imager/extensions"
 	"github.com/siderolabs/talos/pkg/imager/overlay/executor"
 	"github.com/siderolabs/talos/pkg/imager/profile"
@@ -103,8 +103,27 @@ func (i *Imager) Execute(ctx context.Context, outputPath string, report *reporte
 		Status:  reporter.StatusSucceeded,
 	})
 
-	// 4. Build UKI if Secure Boot is enabled.
-	if i.prof.SecureBootEnabled() {
+	// 4. Build UKI if needed
+	needBuildUKI := quirks.New(i.prof.Version).SupportsUKI()
+
+	switch i.prof.Output.Kind {
+	case profile.OutKindUKI:
+		if !needBuildUKI {
+			return "", fmt.Errorf("UKI output is not supported in this Talos version")
+		}
+	case profile.OutKindImage:
+		needBuildUKI = needBuildUKI && i.prof.SecureBootEnabled()
+	case profile.OutKindISO, profile.OutKindInstaller:
+		needBuildUKI = needBuildUKI || quirks.New(i.prof.Version).UseSDBootForUEFI()
+	case profile.OutKindCmdline, profile.OutKindKernel, profile.OutKindInitramfs:
+		needBuildUKI = false
+	case profile.OutKindUnknown:
+		fallthrough
+	default:
+		return "", fmt.Errorf("unknown output kind: %s", i.prof.Output.Kind)
+	}
+
+	if needBuildUKI {
 		if err = i.buildUKI(ctx, report); err != nil {
 			return "", err
 		}
@@ -331,14 +350,21 @@ func (i *Imager) buildCmdline() error {
 		return err
 	}
 
+	q := quirks.New(i.prof.Version)
+
 	cmdline := procfs.NewCmdline("")
 
 	// platform kernel args
 	cmdline.Append(constants.KernelParamPlatform, p.Name())
-	cmdline.SetAll(p.KernelArgs(i.prof.Arch).Strings())
+
+	cmdline.SetAll(p.KernelArgs(i.prof.Arch, q).Strings())
+
+	if q.SupportsHaltIfInstalled() && i.prof.Output.Kind == profile.OutKindISO {
+		cmdline.Append(constants.KernelParamHaltIfInstalled, "1")
+	}
 
 	// board kernel args
-	if i.prof.Board != "" && !quirks.New(i.prof.Version).SupportsOverlay() {
+	if i.prof.Board != "" && !q.SupportsOverlay() {
 		var b talosruntime.Board
 
 		b, err = board.NewBoard(i.prof.Board)
@@ -361,12 +387,12 @@ func (i *Imager) buildCmdline() error {
 	}
 
 	// first defaults, then extra kernel args to allow extra kernel args to override defaults
-	if err = cmdline.AppendAll(kernel.DefaultArgs); err != nil {
+	if err = cmdline.AppendAll(kernel.DefaultArgs(q)); err != nil {
 		return err
 	}
 
 	if i.prof.SecureBootEnabled() {
-		if err = cmdline.AppendAll(kernel.SecureBootArgs); err != nil {
+		if err = cmdline.AppendAll(kernel.SecureBootArgs(q)); err != nil {
 			return err
 		}
 	}
@@ -399,18 +425,8 @@ func (i *Imager) buildCmdline() error {
 func (i *Imager) buildUKI(ctx context.Context, report *reporter.Reporter) error {
 	printf := progressPrintf(report, reporter.Update{Message: "building UKI...", Status: reporter.StatusRunning})
 
-	i.sdBootPath = filepath.Join(i.tempDir, "systemd-boot.efi.signed")
-	i.ukiPath = filepath.Join(i.tempDir, "vmlinuz.efi.signed")
-
-	pcrSigner, err := i.prof.Input.SecureBoot.PCRSigner.GetSigner(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get PCR signer: %w", err)
-	}
-
-	securebootSigner, err := i.prof.Input.SecureBoot.SecureBootSigner.GetSigner(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get SecureBoot signer: %w", err)
-	}
+	i.sdBootPath = filepath.Join(i.tempDir, "systemd-boot.efi")
+	i.ukiPath = filepath.Join(i.tempDir, "vmlinuz.efi")
 
 	builder := uki.Builder{
 		Arch:       i.prof.Arch,
@@ -421,14 +437,36 @@ func (i *Imager) buildUKI(ctx context.Context, report *reporter.Reporter) error 
 		InitrdPath: i.initramfsPath,
 		Cmdline:    i.cmdline,
 
-		SecureBootSigner: securebootSigner,
-		PCRSigner:        pcrSigner,
-
 		OutSdBootPath: i.sdBootPath,
 		OutUKIPath:    i.ukiPath,
 	}
 
-	if err := builder.Build(printf); err != nil {
+	buildFunc := builder.Build
+
+	if i.prof.SecureBootEnabled() {
+		i.sdBootPath = filepath.Join(i.tempDir, "systemd-boot.efi.signed")
+		i.ukiPath = filepath.Join(i.tempDir, "vmlinuz.efi.signed")
+
+		builder.OutSdBootPath = i.sdBootPath
+		builder.OutUKIPath = i.ukiPath
+
+		pcrSigner, err := i.prof.Input.SecureBoot.PCRSigner.GetSigner(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get PCR signer: %w", err)
+		}
+
+		securebootSigner, err := i.prof.Input.SecureBoot.SecureBootSigner.GetSigner(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get SecureBoot signer: %w", err)
+		}
+
+		builder.SecureBootSigner = securebootSigner
+		builder.PCRSigner = pcrSigner
+
+		buildFunc = builder.BuildSigned
+	}
+
+	if err := buildFunc(printf); err != nil {
 		return err
 	}
 

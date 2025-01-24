@@ -1,6 +1,6 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED, PLEASE DO NOT EDIT.
 #
-# Generated on 2024-05-27T16:20:10Z by kres bcb280a.
+# Generated on 2024-12-04T12:34:25Z by kres 232fe63.
 
 name: integration-extensions-cron
 concurrency:
@@ -62,6 +62,10 @@ jobs:
         if: github.event_name != 'schedule'
         run: |
           xargs -a _out/executable-artifacts -I {} chmod +x {}
+      - name: ci-temp-release-tag
+        if: github.event_name != 'schedule'
+        run: |
+          make ci-temp-release-tag
       - name: generate
         if: github.event_name == 'schedule'
         run: |
@@ -105,11 +109,13 @@ jobs:
       - name: e2e-extensions
         env:
           EXTRA_TEST_ARGS: -talos.extensions.qemu
+          GITHUB_STEP_NAME: ${{ github.job}}-e2e-extensions
           IMAGE_REGISTRY: registry.dev.siderolabs.io
           QEMU_EXTRA_DISKS: "3"
           QEMU_MEMORY_WORKERS: "4096"
+          QEMU_WORKERS: "1"
           SHORT_INTEGRATION_TEST: "yes"
-          WITH_CONFIG_PATCH_WORKER: '@_out/extensions-patch.yaml'
+          WITH_CONFIG_PATCH_WORKER: '@_out/installer-extensions-patch.yaml:@hack/test/patches/extensions.yaml:@hack/test/patches/dm-raid-module.yaml'
         run: |
           sudo -E make e2e-qemu
       - name: save artifacts
@@ -118,6 +124,6 @@ jobs:
         with:
           name: talos-logs-integration-extensions
           path: |-
-            ~/.talos/clusters/**/*.log
-            !~/.talos/clusters/**/swtpm.log
+            /tmp/logs-*.tar.gz
+            /tmp/support-*.zip
           retention-days: "5"

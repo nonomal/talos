@@ -11,10 +11,10 @@ import (
 	"log"
 	"net/netip"
 	"strconv"
-	"strings"
 
 	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
+	"github.com/scaleway/scaleway-sdk-go/scw"
 	"github.com/siderolabs/go-procfs/procfs"
 
 	"github.com/siderolabs/talos/internal/app/machined/pkg/runtime"
@@ -22,6 +22,7 @@ import (
 	"github.com/siderolabs/talos/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/netutils"
 	"github.com/siderolabs/talos/pkg/download"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
@@ -55,7 +56,7 @@ func (s *Scaleway) ParseMetadata(metadata *instance.Metadata) (*runtime.Platform
 
 	var publicIPs []string
 
-	if metadata.PublicIP.Address != "" {
+	if metadata.PublicIP.Address != "" && metadata.PublicIP.Family == "inet" {
 		publicIPs = append(publicIPs, metadata.PublicIP.Address)
 	}
 
@@ -74,36 +75,48 @@ func (s *Scaleway) ParseMetadata(metadata *instance.Metadata) (*runtime.Platform
 		Protocol:    nethelpers.ProtocolStatic,
 		Type:        nethelpers.TypeUnicast,
 		Family:      nethelpers.FamilyInet4,
-		Priority:    network.DefaultRouteMetric,
+		Priority:    4 * network.DefaultRouteMetric,
 	}
 
 	route.Normalize()
 	networkConfig.Routes = []network.RouteSpecSpec{route}
 
-	networkConfig.Operators = append(networkConfig.Operators, network.OperatorSpecSpec{
-		Operator:  network.OperatorDHCP4,
-		LinkName:  "eth0",
-		RequireUp: true,
-		DHCP4: network.DHCP4OperatorSpec{
-			RouteMetric: network.DefaultRouteMetric,
-		},
-		ConfigLayer: network.ConfigPlatform,
-	})
+	if len(metadata.PublicIpsV4) > 0 {
+		networkConfig.Operators = append(networkConfig.Operators, network.OperatorSpecSpec{
+			Operator:  network.OperatorDHCP4,
+			LinkName:  "eth0",
+			RequireUp: true,
+			DHCP4: network.DHCP4OperatorSpec{
+				RouteMetric: network.DefaultRouteMetric,
+			},
+			ConfigLayer: network.ConfigPlatform,
+		})
+	}
 
-	if metadata.IPv6.Address != "" {
-		bits, err := strconv.Atoi(metadata.IPv6.Netmask)
+	if metadata.IPv6.Address != "" || len(metadata.PublicIpsV6) > 0 {
+		address := metadata.IPv6.Address
+		netmask := metadata.IPv6.Netmask
+		gateway := metadata.IPv6.Gateway
+
+		if address == "" || netmask == "" || gateway == "" {
+			address = metadata.PublicIpsV6[0].Address
+			netmask = metadata.PublicIpsV6[0].Netmask
+			gateway = metadata.PublicIpsV6[0].Gateway
+		}
+
+		bits, err := strconv.Atoi(netmask)
 		if err != nil {
 			return nil, err
 		}
 
-		ip, err := netip.ParseAddr(metadata.IPv6.Address)
+		ip, err := netip.ParseAddr(address)
 		if err != nil {
 			return nil, err
 		}
 
 		addr := netip.PrefixFrom(ip, bits)
 
-		publicIPs = append(publicIPs, metadata.IPv6.Address)
+		publicIPs = append(publicIPs, address)
 		networkConfig.Addresses = append(networkConfig.Addresses,
 			network.AddressSpecSpec{
 				ConfigLayer: network.ConfigPlatform,
@@ -115,7 +128,7 @@ func (s *Scaleway) ParseMetadata(metadata *instance.Metadata) (*runtime.Platform
 			},
 		)
 
-		gw, err := netip.ParseAddr(metadata.IPv6.Gateway)
+		gw, err := netip.ParseAddr(gateway)
 		if err != nil {
 			return nil, err
 		}
@@ -136,25 +149,30 @@ func (s *Scaleway) ParseMetadata(metadata *instance.Metadata) (*runtime.Platform
 		networkConfig.Routes = append(networkConfig.Routes, route)
 	}
 
-	zoneParts := strings.Split(metadata.Location.ZoneID, "-")
-	if len(zoneParts) > 2 {
-		zoneParts = zoneParts[:2]
-	}
-
 	for _, ipStr := range publicIPs {
 		if ip, err := netip.ParseAddr(ipStr); err == nil {
 			networkConfig.ExternalIPs = append(networkConfig.ExternalIPs, ip)
 		}
 	}
 
+	zone, err := scw.ParseZone(metadata.Location.ZoneID)
+	if err != nil {
+		return nil, err
+	}
+
+	region, err := zone.Region()
+	if err != nil {
+		return nil, err
+	}
+
 	networkConfig.Metadata = &runtimeres.PlatformMetadataSpec{
 		Platform:     s.Name(),
 		Hostname:     metadata.Hostname,
-		Region:       strings.Join(zoneParts, "-"),
-		Zone:         metadata.Location.ZoneID,
+		Region:       region.String(),
+		Zone:         zone.String(),
 		InstanceType: metadata.CommercialType,
 		InstanceID:   metadata.ID,
-		ProviderID:   fmt.Sprintf("scaleway://instance/%s/%s", metadata.Location.ZoneID, metadata.ID),
+		ProviderID:   fmt.Sprintf("scaleway://instance/%s/%s", zone.String(), metadata.ID),
 	}
 
 	return networkConfig, nil
@@ -182,7 +200,7 @@ func (s *Scaleway) Mode() runtime.Mode {
 }
 
 // KernelArgs implements the runtime.Platform interface.
-func (s *Scaleway) KernelArgs(string) procfs.Parameters {
+func (s *Scaleway) KernelArgs(string, quirks.Quirks) procfs.Parameters {
 	return []*procfs.Parameter{
 		procfs.NewParameter("console").Append("tty1").Append("ttyS0"),
 		procfs.NewParameter(constants.KernelParamNetIfnames).Append("0"),

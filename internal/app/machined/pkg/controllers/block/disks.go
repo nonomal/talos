@@ -11,6 +11,8 @@ import (
 
 	"github.com/cosi-project/runtime/pkg/controller"
 	"github.com/cosi-project/runtime/pkg/safe"
+	"github.com/cosi-project/runtime/pkg/state"
+	"github.com/siderolabs/gen/xslices"
 	blkdev "github.com/siderolabs/go-blockdevice/v2/block"
 	"go.uber.org/zap"
 
@@ -31,6 +33,11 @@ func (ctrl *DisksController) Inputs() []controller.Input {
 		{
 			Namespace: block.NamespaceName,
 			Type:      block.DeviceType,
+			Kind:      controller.InputWeak,
+		},
+		{
+			Namespace: block.NamespaceName,
+			Type:      block.SymlinkType,
 			Kind:      controller.InputWeak,
 		},
 	}
@@ -69,15 +76,25 @@ func (ctrl *DisksController) Run(ctx context.Context, r controller.Runtime, logg
 
 		touchedDisks := map[string]struct{}{}
 
-		for iter := blockdevices.Iterator(); iter.Next(); {
-			device := iter.Value()
-
+		for device := range blockdevices.All() {
 			if device.TypedSpec().Type != "disk" {
 				continue
 			}
 
+			if device.TypedSpec().Major == 1 {
+				// ignore ram disks (/dev/ramX), major number is 1
+				// ref: https://www.kernel.org/doc/Documentation/admin-guide/devices.txt
+				// ref: https://github.com/util-linux/util-linux/blob/c0207d354ee47fb56acfa64b03b5b559bb301280/misc-utils/lsblk.c#L2697-L2699
+				continue
+			}
+
+			// always update symlinks, but skip if the disk hasn't been created yet
+			if err = ctrl.updateSymlinks(ctx, r, device); err != nil {
+				return err
+			}
+
 			if lastObserved, ok := lastObservedGenerations[device.Metadata().ID()]; ok && device.TypedSpec().Generation == lastObserved {
-				// ignore disks which have some generation as before (don't query them once again)
+				// ignore disks which have same generation as before (don't query them once again)
 				touchedDisks[device.Metadata().ID()] = struct{}{}
 
 				continue
@@ -85,7 +102,7 @@ func (ctrl *DisksController) Run(ctx context.Context, r controller.Runtime, logg
 
 			lastObservedGenerations[device.Metadata().ID()] = device.TypedSpec().Generation
 
-			if err = ctrl.analyzeBlockDevice(ctx, r, logger.With(zap.String("device", device.Metadata().ID())), device, touchedDisks); err != nil {
+			if err = ctrl.analyzeBlockDevice(ctx, r, logger.With(zap.String("device", device.Metadata().ID())), device, touchedDisks, blockdevices); err != nil {
 				return fmt.Errorf("failed to analyze block device: %w", err)
 			}
 		}
@@ -95,9 +112,7 @@ func (ctrl *DisksController) Run(ctx context.Context, r controller.Runtime, logg
 			return fmt.Errorf("failed to list disks: %w", err)
 		}
 
-		for iter := disks.Iterator(); iter.Next(); {
-			disk := iter.Value()
-
+		for disk := range disks.All() {
 			if _, ok := touchedDisks[disk.Metadata().ID()]; ok {
 				continue
 			}
@@ -111,7 +126,37 @@ func (ctrl *DisksController) Run(ctx context.Context, r controller.Runtime, logg
 	}
 }
 
-func (ctrl *DisksController) analyzeBlockDevice(ctx context.Context, r controller.Runtime, logger *zap.Logger, device *block.Device, touchedDisks map[string]struct{}) error {
+func (ctrl *DisksController) updateSymlinks(ctx context.Context, r controller.Runtime, device *block.Device) error {
+	symlinks, err := safe.ReaderGetByID[*block.Symlink](ctx, r, device.Metadata().ID())
+	if err != nil {
+		if state.IsNotFoundError(err) {
+			return nil
+		}
+
+		return err
+	}
+
+	_, err = safe.ReaderGetByID[*block.Disk](ctx, r, device.Metadata().ID())
+	if err != nil {
+		if state.IsNotFoundError(err) {
+			// don't create disk entries even if we have symlinks, let analyze handle it
+			return nil
+		}
+
+		return err
+	}
+
+	return safe.WriterModify(ctx, r, block.NewDisk(block.NamespaceName, device.Metadata().ID()), func(d *block.Disk) error {
+		d.TypedSpec().Symlinks = symlinks.TypedSpec().Paths
+
+		return nil
+	})
+}
+
+//nolint:gocyclo
+func (ctrl *DisksController) analyzeBlockDevice(
+	ctx context.Context, r controller.Runtime, logger *zap.Logger, device *block.Device, touchedDisks map[string]struct{}, allBlockdevices safe.List[*block.Device],
+) error {
 	bd, err := blkdev.NewFromPath(filepath.Join("/dev", device.Metadata().ID()))
 	if err != nil {
 		logger.Debug("failed to open blockdevice", zap.Error(err))
@@ -153,10 +198,29 @@ func (ctrl *DisksController) analyzeBlockDevice(ctx context.Context, r controlle
 		logger.Debug("failed to get properties", zap.Error(err))
 	}
 
+	secondaryDisks := xslices.Map(device.TypedSpec().Secondaries, func(devID string) string {
+		if secondary, ok := allBlockdevices.Find(func(dev *block.Device) bool {
+			return dev.Metadata().ID() == devID
+		}); ok {
+			if secondary.TypedSpec().Parent != "" {
+				return secondary.TypedSpec().Parent
+			}
+		}
+
+		return devID
+	})
+
+	symlinks, err := safe.ReaderGetByID[*block.Symlink](ctx, r, device.Metadata().ID())
+	if err != nil && !state.IsNotFoundError(err) {
+		return err
+	}
+
 	touchedDisks[device.Metadata().ID()] = struct{}{}
 
 	return safe.WriterModify(ctx, r, block.NewDisk(block.NamespaceName, device.Metadata().ID()), func(d *block.Disk) error {
-		d.TypedSpec().Size = size
+		d.TypedSpec().SetSize(size)
+
+		d.TypedSpec().DevPath = filepath.Join("/dev", device.Metadata().ID())
 		d.TypedSpec().IOSize = ioSize
 		d.TypedSpec().SectorSize = sectorSize
 		d.TypedSpec().Readonly = readOnly
@@ -166,10 +230,19 @@ func (ctrl *DisksController) analyzeBlockDevice(ctx context.Context, r controlle
 		d.TypedSpec().Serial = props.Serial
 		d.TypedSpec().Modalias = props.Modalias
 		d.TypedSpec().WWID = props.WWID
+		d.TypedSpec().UUID = props.UUID
 		d.TypedSpec().BusPath = props.BusPath
 		d.TypedSpec().SubSystem = props.SubSystem
 		d.TypedSpec().Transport = props.Transport
 		d.TypedSpec().Rotational = props.Rotational
+
+		d.TypedSpec().SecondaryDisks = secondaryDisks
+
+		if symlinks != nil {
+			d.TypedSpec().Symlinks = symlinks.TypedSpec().Paths
+		} else {
+			d.TypedSpec().Symlinks = nil
+		}
 
 		return nil
 	})

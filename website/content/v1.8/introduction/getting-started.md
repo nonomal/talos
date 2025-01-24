@@ -25,13 +25,13 @@ Regardless of where you run Talos, the steps to create a Kubernetes cluster are:
 `talosctl` is a CLI tool which interfaces with the Talos API.
 Talos Linux has no SSH access: `talosctl` is the tool you use to interact with the operating system on the machines.
 
-You can download `talosctl` an MacOS and Linux via:
+You can download `talosctl` on MacOS and Linux via:
 
 ```bash
 brew install siderolabs/tap/talosctl
 ```
 
-For manually installation and other platform please see the [talosctl installation guide]({{< relref "../talos-guides/install/talosctl.md" >}}).
+For manual installation and other platforms please see the [talosctl installation guide]({{< relref "../talos-guides/install/talosctl.md" >}}).
 
 > Note: If you boot systems off the ISO, Talos on the ISO image runs in RAM and acts as an installer.
 > The version of `talosctl` that is used to create the machine configurations controls the version of Talos Linux that is installed on the machines - NOT the image that the machines are initially booted off.
@@ -288,7 +288,8 @@ At this point, Talos will form an `etcd` cluster, and start the Kubernetes contr
 After a few moments, you will be able to download your Kubernetes client configuration and get started:
 
 ```sh
-  talosctl kubeconfig --nodes 192.168.0.2 --endpoints 192.168.0.2
+talosctl kubeconfig --nodes 192.168.0.2 --endpoints 192.168.0.2 \
+  --talosconfig=./talosconfig
 ```
 
 Running this command will add (merge) you new cluster into your local Kubernetes configuration.
@@ -296,13 +297,14 @@ Running this command will add (merge) you new cluster into your local Kubernetes
 If you would prefer the configuration to _not_ be merged into your default Kubernetes configuration file, pass in a filename:
 
 ```sh
-  talosctl kubeconfig alternative-kubeconfig --nodes 192.168.0.2 --endpoints 192.168.0.2
+talosctl kubeconfig alternative-kubeconfig --nodes 192.168.0.2 --endpoints 192.168.0.2 \
+  --talosconfig=./talosconfig
 ```
 
 You should now be able to connect to Kubernetes and see your nodes:
 
 ```sh
-  kubectl get nodes
+kubectl get nodes
 ```
 
 And use talosctl to explore your cluster:

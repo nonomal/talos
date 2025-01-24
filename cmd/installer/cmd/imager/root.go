@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/dustin/go-humanize"
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/siderolabs/gen/xslices"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -39,12 +40,15 @@ var cmdFlags struct {
 	MetaValues            install.MetaValues
 	SystemExtensionImages []string
 	BaseInstallerImage    string
+	ImageCache            string
 	OutputPath            string
 	OutputKind            string
 	TarToStdout           bool
 	OverlayName           string
 	OverlayImage          string
 	OverlayOptions        []string
+	// Only used when generating a secure boot iso without also providing a secure boot database.
+	SecurebootIncludeWellKnownCerts bool
 }
 
 // rootCmd represents the base command when called without any subcommands.
@@ -153,8 +157,27 @@ var rootCmd = &cobra.Command{
 					}
 				}
 
+				if cmdFlags.ImageCache != "" {
+					parseOpts := []name.Option{name.StrictValidation}
+
+					if cmdFlags.Insecure {
+						parseOpts = append(parseOpts, name.Insecure)
+					}
+
+					if _, err := name.ParseReference(cmdFlags.ImageCache, parseOpts...); err == nil {
+						prof.Input.ImageCache = profile.ContainerAsset{
+							ImageRef: cmdFlags.ImageCache,
+						}
+					} else {
+						prof.Input.ImageCache = profile.ContainerAsset{
+							OCIPath: cmdFlags.ImageCache,
+						}
+					}
+				}
+
 				if cmdFlags.Insecure {
 					prof.Input.BaseInstaller.ForceInsecure = cmdFlags.Insecure
+					prof.Input.ImageCache.ForceInsecure = cmdFlags.Insecure
 				}
 
 				if cmdFlags.ImageDiskSize != "" {
@@ -172,6 +195,13 @@ var rootCmd = &cobra.Command{
 					}
 
 					prof.Output.ImageOptions.DiskSize = int64(size)
+				}
+
+				if cmdFlags.SecurebootIncludeWellKnownCerts {
+					if prof.Input.SecureBoot == nil {
+						prof.Input.SecureBoot = &profile.SecureBootAssets{}
+					}
+					prof.Input.SecureBoot.IncludeWellKnownCerts = true
 				}
 			}
 
@@ -214,6 +244,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cmdFlags.Platform, "platform", "", "The value of "+constants.KernelParamPlatform)
 	rootCmd.PersistentFlags().StringVar(&cmdFlags.Arch, "arch", runtime.GOARCH, "The target architecture")
 	rootCmd.PersistentFlags().StringVar(&cmdFlags.BaseInstallerImage, "base-installer-image", "", "Base installer image to use")
+	rootCmd.PersistentFlags().StringVar(&cmdFlags.ImageCache, "image-cache", "", "Image cache container image or oci path")
 	rootCmd.PersistentFlags().StringVar(&cmdFlags.Board, "board", "", "The value of "+constants.KernelParamBoard)
 	rootCmd.PersistentFlags().BoolVar(&cmdFlags.Insecure, "insecure", false, "Pull assets from insecure registry")
 	rootCmd.PersistentFlags().StringVar(&cmdFlags.ImageDiskSize, "image-disk-size", "", "Set custom disk image size (accepts human readable values, e.g. 6GiB)")
@@ -229,4 +260,6 @@ func init() {
 	rootCmd.MarkFlagsMutuallyExclusive("board", "overlay-name")
 	rootCmd.MarkFlagsMutuallyExclusive("board", "overlay-image")
 	rootCmd.MarkFlagsMutuallyExclusive("board", "overlay-option")
+	rootCmd.PersistentFlags().BoolVar(
+		&cmdFlags.SecurebootIncludeWellKnownCerts, "secureboot-include-well-known-certs", false, "Include well-known (Microsoft) UEFI certificates when generating a secure boot database")
 }

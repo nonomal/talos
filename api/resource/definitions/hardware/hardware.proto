@@ -3,6 +3,7 @@ syntax = "proto3";
 package talos.resource.definitions.hardware;
 
 option go_package = "github.com/siderolabs/talos/pkg/machinery/api/resource/definitions/hardware";
+option java_package = "dev.talos.api.resource.definitions.hardware";
 
 // MemoryModuleSpec represents a single Memory.
 message MemoryModuleSpec {
@@ -26,6 +27,18 @@ message PCIDeviceSpec {
   string subclass_id = 6;
   string vendor_id = 7;
   string product_id = 8;
+}
+
+// PCIDriverRebindConfigSpec describes PCI rebind configuration.
+message PCIDriverRebindConfigSpec {
+  string pciid = 1;
+  string target_driver = 2;
+}
+
+// PCIDriverRebindStatusSpec describes status of rebinded drivers.
+message PCIDriverRebindStatusSpec {
+  string pciid = 1;
+  string target_driver = 2;
 }
 
 // ProcessorSpec represents a single processor.

@@ -13,7 +13,9 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/siderolabs/crypto/x509"
 
+	"github.com/siderolabs/talos/pkg/machinery/cel"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
+	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 )
 
 // MachineConfig defines the requirements for a config that pertains to machine
@@ -42,7 +44,9 @@ type MachineConfig interface {
 	Kernel() Kernel
 	SeccompProfiles() []SeccompProfile
 	NodeLabels() NodeLabels
+	NodeAnnotations() NodeAnnotations
 	NodeTaints() NodeTaints
+	BaseRuntimeSpecOverrides() map[string]any
 }
 
 // SeccompProfile defines the requirements for a config that pertains to seccomp
@@ -54,6 +58,9 @@ type SeccompProfile interface {
 
 // NodeLabels defines the labels that should be set on a node.
 type NodeLabels map[string]string
+
+// NodeAnnotations defines the annotations that should be set on a node.
+type NodeAnnotations map[string]string
 
 // NodeTaints defines the taints that should be set on a node.
 type NodeTaints map[string]string
@@ -87,7 +94,8 @@ type File interface {
 type Install interface {
 	Image() string
 	Extensions() []Extension
-	Disk() (string, error)
+	Disk() string
+	DiskMatchExpression() (*cel.Expression, error)
 	ExtraKernelArgs() []string
 	Zero() bool
 	LegacyBIOSSupport() bool
@@ -117,12 +125,16 @@ type MachineControlPlane interface {
 
 // MachineControllerManager defines the requirements for a config that pertains to ControllerManager
 // related options.
+//
+//nolint:iface
 type MachineControllerManager interface {
 	Disabled() bool
 }
 
 // MachineScheduler defines the requirements for a config that pertains to Scheduler
 // related options.
+//
+//nolint:iface
 type MachineScheduler interface {
 	Disabled() bool
 }
@@ -132,6 +144,7 @@ type MachineScheduler interface {
 type MachineNetwork interface {
 	Hostname() string
 	Resolvers() []string
+	SearchDomains() []string
 	Devices() []Device
 	ExtraHosts() []ExtraHost
 	KubeSpan() KubeSpan
@@ -153,6 +166,7 @@ type Device interface {
 	Routes() []Route
 	Bond() Bond
 	Bridge() Bridge
+	BridgePort() BridgePort
 	Vlans() []Vlan
 	MTU() int
 	DHCP() bool
@@ -180,11 +194,15 @@ type VIPConfig interface {
 }
 
 // VIPEquinixMetal contains Equinix Metal API VIP settings.
+//
+//nolint:iface
 type VIPEquinixMetal interface {
 	APIToken() string
 }
 
 // VIPHCloud contains Hetzner Cloud API VIP settings.
+//
+//nolint:iface
 type VIPHCloud interface {
 	APIToken() string
 }
@@ -241,6 +259,8 @@ type Bond interface {
 }
 
 // STP contains the Spanning Tree Protocol settings for a bridge.
+//
+//nolint:iface
 type STP interface {
 	Enabled() bool
 }
@@ -255,6 +275,11 @@ type Bridge interface {
 	Interfaces() []string
 	STP() STP
 	VLAN() BridgeVLAN
+}
+
+// BridgePort contains the options for a bridge port.
+type BridgePort interface {
+	Master() string
 }
 
 // Vlan represents vlan settings for a device.
@@ -296,6 +321,7 @@ type KubeSpanFilters interface {
 type NetworkDeviceSelector interface {
 	Bus() string
 	HardwareAddress() string
+	PermanentAddress() string
 	PCIID() string
 	KernelDriver() string
 	Physical() *bool
@@ -344,6 +370,7 @@ type Registries interface {
 type RegistryMirrorConfig interface {
 	Endpoints() []string
 	OverridePath() bool
+	SkipFallback() bool
 }
 
 // RegistryConfig specifies auth & TLS config per registry.
@@ -424,6 +451,8 @@ type Features interface {
 	DiskQuotaSupportEnabled() bool
 	HostDNS() HostDNS
 	KubePrism() KubePrism
+	ImageCache() ImageCache
+	NodeAddressSortAlgorithm() nethelpers.AddressSortAlgorithm
 }
 
 // KubernetesTalosAPIAccess describes the Kubernetes Talos API access features.
@@ -444,6 +473,11 @@ type HostDNS interface {
 	Enabled() bool
 	ForwardKubeDNSToHost() bool
 	ResolveMemberNames() bool
+}
+
+// ImageCache describes the image cache configuration.
+type ImageCache interface {
+	LocalEnabled() bool
 }
 
 // UdevConfig describes configuration for udev.

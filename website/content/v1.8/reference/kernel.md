@@ -8,7 +8,7 @@ description: "Linux kernel reference."
 Talos supports a number of kernel commandline parameters.  Some are required for
 it to operate.  Others are optional and useful in certain circumstances.
 
-Several of these are enforced by the Kernel Self Protection Project [KSPP](https://kernsec.org/wiki/index.php/Kernel_Self_Protection_Project/Recommended_Settings).
+Several of these are enforced by the Kernel Self Protection Project [KSPP](https://kspp.github.io/Recommended_Settings).
 
 **Required** parameters:
 
@@ -145,6 +145,19 @@ mkisofs -joliet -rock -volid 'metal-iso' -output config.iso iso/
 
 Kernel parameters prefixed with `talos.config.auth.` are used to configure [OAuth2 authentication for the machine configuration]({{< relref "../advanced/machine-config-oauth" >}}).
 
+#### `talos.config.inline`
+
+The kernel parameter `talos.config.inline` can be used to provide initial minimal machine configuration directly on the kernel command line, when other means of providing the configuration are not available.
+The machine configuration should be `zstd` compressed and base64-encoded to be passed as a kernel parameter.
+
+> Note: The kernel command line has a limited size (4096 bytes), so this method is only suitable for small configuration documents.
+
+One such example is to provide [a custom CA certificate]({{<  relref "../talos-guides/configuration/certificate-authorities" >}}) via `TrustedRootsConfig` in the machine configuration:
+
+```shell
+cat config.yaml | zstd --compress --ultra -22 | base64 -w 0
+```
+
 #### `talos.platform`
 
 The platform name on which Talos will run.
@@ -245,3 +258,22 @@ Example:
 ```text
 talos.environment=http_proxy=http://proxy.example.com:8080 talos.environment=https_proxy=http://proxy.example.com:8080
 ```
+
+#### `talos.device.settle_time`
+
+The time in Go duration format to wait for devices to settle before starting the boot process.
+By default, Talos waits for `udevd` to scan and settle, but with some RAID controllers `udevd` might
+report settled devices before they are actually ready.
+Adding this kernel argument provides extra settle time on top of `udevd` settle time.
+The maximum value is `10m` (10 minutes).
+
+Example:
+
+```text
+talos.device.settle_time=3m
+```
+
+#### `talos.halt_if_installed`
+
+If set to `1`, Talos will pause the boot sequence and keeps printing a message until the boot timeout is reached if it detects that it is already installed.
+This is useful if booting from ISO/PXE and you want to prevent the machine accidentally booting from the ISO/PXE after installation to the disk.

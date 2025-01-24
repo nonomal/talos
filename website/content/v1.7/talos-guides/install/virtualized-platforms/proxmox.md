@@ -22,13 +22,13 @@ Visit the [Proxmox](https://www.proxmox.com/en/downloads) downloads page if nece
 
 ### Install talosctl
 
-You can download `talosctl` an MacOS and Linux via:
+You can download `talosctl` on MacOS and Linux via:
 
 ```bash
 brew install siderolabs/tap/talosctl
 ```
 
-For manually installation and other platform please see the [talosctl installation guide]({{< relref "../talosctl.md" >}}).
+For manual installation and other platforms please see the [talosctl installation guide]({{< relref "../talosctl.md" >}}).
 
 ### Download ISO Image
 
