@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/docker/docker/api/types"
@@ -20,6 +21,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
 	"github.com/hashicorp/go-multierror"
+	"github.com/siderolabs/gen/xslices"
 
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
@@ -115,7 +117,7 @@ func (p *provisioner) createNode(ctx context.Context, clusterReq provision.Clust
 	}
 
 	// Create the host config.
-	mounts := make([]mount.Mount, 0, len(constants.Overlays)+5)
+	mounts := make([]mount.Mount, 0, len(constants.Overlays)+5+len(nodeReq.Mounts))
 
 	for _, path := range []string{"/run", "/system", "/tmp"} {
 		mounts = append(mounts, mount.Mount{
@@ -124,12 +126,19 @@ func (p *provisioner) createNode(ctx context.Context, clusterReq provision.Clust
 		})
 	}
 
-	for _, path := range append([]string{constants.EphemeralMountPoint, constants.StateMountPoint}, constants.Overlays...) {
+	for _, path := range append(
+		[]string{constants.EphemeralMountPoint, constants.StateMountPoint},
+		xslices.Map(constants.Overlays, func(overlay constants.SELinuxLabeledPath) string {
+			return overlay.Path
+		})...,
+	) {
 		mounts = append(mounts, mount.Mount{
 			Type:   mount.TypeVolume,
 			Target: path,
 		})
 	}
+
+	mounts = slices.Concat(mounts, nodeReq.Mounts)
 
 	hostConfig := &container.HostConfig{
 		Privileged:  true,

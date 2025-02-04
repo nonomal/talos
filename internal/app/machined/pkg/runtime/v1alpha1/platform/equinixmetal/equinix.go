@@ -29,6 +29,7 @@ import (
 	"github.com/siderolabs/talos/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/netutils"
 	"github.com/siderolabs/talos/pkg/download"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
@@ -112,7 +113,7 @@ func (p *EquinixMetal) Mode() runtime.Mode {
 }
 
 // KernelArgs implements the runtime.Platform interface.
-func (p *EquinixMetal) KernelArgs(arch string) procfs.Parameters {
+func (p *EquinixMetal) KernelArgs(arch string, _ quirks.Quirks) procfs.Parameters {
 	switch arch {
 	case "amd64":
 		return []*procfs.Parameter{
@@ -157,20 +158,18 @@ func (p *EquinixMetal) ParseMetadata(ctx context.Context, equinixMetadata *Metad
 
 		found := false
 
-		hostInterfaceIter := hostInterfaces.Iterator()
-
-		for hostInterfaceIter.Next() {
+		for hostInterface := range hostInterfaces.All() {
 			// match using permanent MAC address:
 			// - bond interfaces don't have permanent addresses set, so we skip them this way
 			// - if the bond is already configured, regular hardware address is overwritten with bond address
-			if hostInterfaceIter.Value().TypedSpec().PermanentAddr.String() == iface.MAC {
+			if hostInterface.TypedSpec().PermanentAddr.String() == iface.MAC {
 				found = true
 
 				slaveIndex := bondSlaveIndexes[iface.Bond]
 
 				networkConfig.Links = append(networkConfig.Links,
 					network.LinkSpecSpec{
-						Name: hostInterfaceIter.Value().Metadata().ID(),
+						Name: hostInterface.Metadata().ID(),
 						Up:   true,
 						BondSlave: network.BondSlave{
 							MasterName: iface.Bond,

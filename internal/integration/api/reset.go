@@ -8,11 +8,13 @@ package api
 
 import (
 	"context"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/cosi-project/runtime/pkg/resource/rtestutils"
 	"github.com/siderolabs/gen/xslices"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/siderolabs/talos/internal/integration/base"
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
@@ -20,6 +22,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/client"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 )
 
 // ResetSuite ...
@@ -70,7 +73,7 @@ func (suite *ResetSuite) TestResetNodeByNode() {
 	nodes := suite.DiscoverNodeInternalIPs(suite.ctx)
 	suite.Require().NotEmpty(nodes)
 
-	sort.Strings(nodes)
+	slices.Sort(nodes)
 
 	for _, node := range nodes {
 		suite.ResetNode(suite.ctx, node, &machineapi.ResetRequest{
@@ -142,7 +145,7 @@ func (suite *ResetSuite) TestResetWithSpecStateAndUserDisks() {
 			switch {
 			case disk.SystemDisk:
 				return false
-			case disk.Type == storage.Disk_UNKNOWN, disk.Type == storage.Disk_CD, disk.Type == storage.Disk_SD:
+			case disk.Type == storage.Disk_UNKNOWN, disk.Type == storage.Disk_CD, disk.Type == storage.Disk_SD, disk.Type == storage.Disk_NVME:
 				return false
 			case disk.Readonly:
 				return false
@@ -185,6 +188,14 @@ func (suite *ResetSuite) TestResetDuringBoot() {
 	suite.AssertBootIDChanged(nodeCtx, bootIDBefore, node, 3*time.Minute)
 
 	suite.ClearConnectionRefused(suite.ctx, node)
+
+	// make sure EPHEMERAL is ready
+	rtestutils.AssertResources(client.WithNode(suite.ctx, node), suite.T(), suite.Client.COSI,
+		[]string{constants.EphemeralPartitionLabel},
+		func(vs *block.VolumeStatus, asrt *assert.Assertions) {
+			asrt.Equal(block.VolumePhaseReady, vs.TypedSpec().Phase)
+		},
+	)
 
 	suite.ResetNode(suite.ctx, node, &machineapi.ResetRequest{
 		Reboot:   true,

@@ -11,6 +11,7 @@ import (
 	"github.com/siderolabs/gen/pair/ordered"
 
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
+	"github.com/siderolabs/talos/pkg/machinery/compatibility/talos110"
 	"github.com/siderolabs/talos/pkg/machinery/compatibility/talos12"
 	"github.com/siderolabs/talos/pkg/machinery/compatibility/talos13"
 	"github.com/siderolabs/talos/pkg/machinery/compatibility/talos14"
@@ -18,6 +19,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/compatibility/talos16"
 	"github.com/siderolabs/talos/pkg/machinery/compatibility/talos17"
 	"github.com/siderolabs/talos/pkg/machinery/compatibility/talos18"
+	"github.com/siderolabs/talos/pkg/machinery/compatibility/talos19"
 )
 
 // TalosVersion embeds Talos version.
@@ -46,6 +48,17 @@ func (v *TalosVersion) String() string {
 // DisablePredictableNetworkInterfaces returns true if predictable network interfaces should be disabled on upgrade.
 func (v *TalosVersion) DisablePredictableNetworkInterfaces() bool {
 	if v.majorMinor[0] <= talos14.MajorMinor[0] && v.majorMinor[1] <= talos14.MajorMinor[1] {
+		return true
+	}
+
+	return false
+}
+
+// PrecreateStatePartition returns true if running an 1.8+ installer from a version before <=1.7.x.
+//
+// Host Talos needs STATE partition to save the machine configuration.
+func (v *TalosVersion) PrecreateStatePartition() bool {
+	if v.majorMinor[0] <= talos17.MajorMinor[0] && v.majorMinor[1] <= talos17.MajorMinor[1] {
 		return true
 	}
 
@@ -83,6 +96,12 @@ func (v *TalosVersion) UpgradeableFrom(host *TalosVersion) error {
 	case talos18.MajorMinor: // upgrades to 1.8.x
 		minHostUpgradeVersion, maxHostDowngradeVersion = talos18.MinimumHostUpgradeVersion, talos18.MaximumHostDowngradeVersion
 		deniedHostUpgradeVersions = talos18.DeniedHostUpgradeVersions
+	case talos19.MajorMinor: // upgrades to 1.9.x
+		minHostUpgradeVersion, maxHostDowngradeVersion = talos19.MinimumHostUpgradeVersion, talos19.MaximumHostDowngradeVersion
+		deniedHostUpgradeVersions = talos19.DeniedHostUpgradeVersions
+	case talos110.MajorMinor: // upgrades to 1.10.x
+		minHostUpgradeVersion, maxHostDowngradeVersion = talos110.MinimumHostUpgradeVersion, talos110.MaximumHostDowngradeVersion
+		deniedHostUpgradeVersions = talos110.DeniedHostUpgradeVersions
 	default:
 		return fmt.Errorf("upgrades to version %s are not supported", v.version.String())
 	}

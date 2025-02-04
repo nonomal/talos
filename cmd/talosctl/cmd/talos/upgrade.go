@@ -5,11 +5,12 @@
 package talos
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -146,8 +147,8 @@ func upgradeGetActorID(ctx context.Context, c *client.Client, opts []client.Upgr
 
 func init() {
 	rebootModes := maps.Keys(machine.UpgradeRequest_RebootMode_value)
-	sort.Slice(rebootModes, func(i, j int) bool {
-		return machine.UpgradeRequest_RebootMode_value[rebootModes[i]] < machine.UpgradeRequest_RebootMode_value[rebootModes[j]]
+	slices.SortFunc(rebootModes, func(a, b string) int {
+		return cmp.Compare(machine.UpgradeRequest_RebootMode_value[a], machine.UpgradeRequest_RebootMode_value[b])
 	})
 
 	rebootModes = xslices.Map(rebootModes, strings.ToLower)
@@ -164,5 +165,10 @@ func init() {
 	upgradeCmd.Flags().BoolVarP(&upgradeCmdFlags.force, "force", "f", false, "force the upgrade (skip checks on etcd health and members, might lead to data loss)")
 	upgradeCmd.Flags().BoolVar(&upgradeCmdFlags.insecure, "insecure", false, "upgrade using the insecure (encrypted with no auth) maintenance service")
 	upgradeCmdFlags.addTrackActionFlags(upgradeCmd)
+
+	if err := upgradeCmd.Flags().MarkHidden("preserve"); err != nil {
+		panic(err)
+	}
+
 	addCommand(upgradeCmd)
 }

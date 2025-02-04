@@ -13,7 +13,7 @@ set -e
 # export GOVC_NETWORK='PortGroup Name'
 
 CLUSTER_NAME=${CLUSTER_NAME:=vmware-test}
-TALOS_VERSION=v1.1.0
+TALOS_VERSION=${TALOS_VERSION:=latest}
 OVA_PATH=${OVA_PATH:="https://github.com/siderolabs/talos/releases/download/${TALOS_VERSION}/vmware-amd64.ova"}
 
 CONTROL_PLANE_COUNT=${CONTROL_PLANE_COUNT:=3}
@@ -60,7 +60,7 @@ create () {
              echo "GOVC_NETWORK is unset, assuming default VM Network";
         else
             echo "GOVC_NETWORK set to ${GOVC_NETWORK}";
-            govc vm.network.change -vm ${CLUSTER_NAME}-control-plane-${i} -net ${GOVC_NETWORK} ethernet-0
+            govc vm.network.change -vm ${CLUSTER_NAME}-control-plane-${i} -net "${GOVC_NETWORK}" ethernet-0
         fi
 
         govc vm.power -on ${CLUSTER_NAME}-control-plane-${i}
@@ -87,7 +87,7 @@ create () {
              echo "GOVC_NETWORK is unset, assuming default VM Network";
         else
             echo "GOVC_NETWORK set to ${GOVC_NETWORK}";
-            govc vm.network.change -vm ${CLUSTER_NAME}-worker-${i} -net ${GOVC_NETWORK} ethernet-0
+            govc vm.network.change -vm ${CLUSTER_NAME}-worker-${i} -net "${GOVC_NETWORK}" ethernet-0
         fi
 
 

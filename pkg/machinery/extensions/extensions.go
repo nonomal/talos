@@ -12,8 +12,11 @@ var AllowedPaths = []string{
 	"/etc/cri/conf.d",
 	"/lib/firmware",
 	"/lib/modules",
+	// The glibc loader is required by glibc dynamic binaries.
 	"/lib64/ld-linux-x86-64.so.2",
-	"/usr/etc/udev/rules.d",
+	// /sbin/ldconfig is required by the nvidia container toolkit.
+	"/sbin/ldconfig",
+	"/usr/lib/udev/rules.d",
 	"/usr/local",
 	// glvnd, egl and vulkan are needed for OpenGL/Vulkan.
 	"/usr/share/glvnd",

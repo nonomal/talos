@@ -22,7 +22,7 @@ import (
 
 // RebootSuite ...
 type RebootSuite struct {
-	base.APISuite
+	base.K8sSuite
 
 	ctx       context.Context //nolint:containedctx
 	ctxCancel context.CancelFunc
@@ -66,6 +66,7 @@ func (suite *RebootSuite) TestRebootNodeByNode() {
 			suite.ctx, node, func(nodeCtx context.Context) error {
 				return base.IgnoreGRPCUnavailable(suite.Client.Reboot(nodeCtx))
 			}, 10*time.Minute,
+			suite.CleanupFailedPods,
 		)
 	}
 }
@@ -166,7 +167,7 @@ func (suite *RebootSuite) TestRebootAllNodes() {
 					return fmt.Errorf("bootID record not found for %q", node)
 				}
 
-				bootIDBefore := bootIDBeforeInterface.(string) //nolint:errcheck,forcetypeassert
+				bootIDBefore := bootIDBeforeInterface.(string) //nolint:forcetypeassert
 
 				nodeCtx := client.WithNodes(suite.ctx, node)
 

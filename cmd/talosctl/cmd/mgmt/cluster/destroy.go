@@ -15,7 +15,9 @@ import (
 )
 
 var destroyCmdFlags struct {
-	forceDelete bool
+	forceDelete                bool
+	saveSupportArchivePath     string
+	saveClusterLogsArchivePath string
 }
 
 // destroyCmd represents the cluster destroy command.
@@ -42,11 +44,19 @@ func destroy(ctx context.Context) error {
 		return err
 	}
 
-	return provisioner.Destroy(ctx, cluster, provision.WithDeleteOnErr(destroyCmdFlags.forceDelete))
+	return provisioner.Destroy(
+		ctx,
+		cluster,
+		provision.WithDeleteOnErr(destroyCmdFlags.forceDelete),
+		provision.WithSaveSupportArchivePath(destroyCmdFlags.saveSupportArchivePath),
+		provision.WithSaveClusterLogsArchivePath(destroyCmdFlags.saveClusterLogsArchivePath),
+	)
 }
 
 func init() {
 	destroyCmd.PersistentFlags().BoolVarP(&destroyCmdFlags.forceDelete, "force", "f", false, "force deletion of cluster directory if there were errors")
+	destroyCmd.PersistentFlags().StringVarP(&destroyCmdFlags.saveSupportArchivePath, "save-support-archive-path", "", "", "save support archive to the specified file on destroy")
+	destroyCmd.PersistentFlags().StringVarP(&destroyCmdFlags.saveClusterLogsArchivePath, "save-cluster-logs-archive-path", "", "", "save cluster logs archive to the specified file on destroy")
 
 	Cmd.AddCommand(destroyCmd)
 }

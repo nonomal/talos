@@ -64,7 +64,7 @@ func (ctrl *ManifestController) Outputs() []controller.Output {
 // Run implements controller.Controller interface.
 //
 //nolint:gocyclo
-func (ctrl *ManifestController) Run(ctx context.Context, r controller.Runtime, logger *zap.Logger) error {
+func (ctrl *ManifestController) Run(ctx context.Context, r controller.Runtime, _ *zap.Logger) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -169,8 +169,6 @@ func (ctrl *ManifestController) render(cfg k8s.BootstrapManifestsConfigSpec, scr
 		ApidPort int
 
 		TalosServiceAccount TalosServiceAccount
-
-		HostDNSAddr string
 	}{
 		BootstrapManifestsConfigSpec: cfg,
 		Secrets:                      scrt,
@@ -234,12 +232,6 @@ func (ctrl *ManifestController) render(cfg k8s.BootstrapManifestsConfigSpec, scr
 				{"12-talos-api-service", talosAPIService},
 				{"13-talos-service-account-crd", talosServiceAccountCRDTemplate},
 			},
-		)
-	}
-
-	if cfg.ServiceHostDNSAddress != "" {
-		defaultManifests = append(defaultManifests,
-			manifestDesc{"15-host-dns-service", talosHostDNSSvcTemplate},
 		)
 	}
 

@@ -113,20 +113,20 @@ version_menu = "Releases"
 
 # A link to latest version of the docs. Used in the "version-banner" partial to
 # point people to the main doc site.
-url_latest_version = "/v1.7"
+url_latest_version = "/v1.9"
 
 # Repository configuration (URLs for in-page links to opening issues and suggesting changes)
-# github_repo = "https://github.com/googley-example"
+github_repo = "https://github.com/siderolabs/talos"
 
 # An optional link to a related project repo. For example, the sibling repository where your product code lives.
 # github_project_repo = "https://github.com/googley"
 
 # Specify a value here if your content directory is not in your repo's root directory
-# github_subdir = ""
+github_subdir = "website"
 
 # Uncomment this if you have a newer GitHub repo with "main" as the default branch,
 # or specify a new value if you want to reference another branch in your GitHub links
-# github_branch= "main"
+github_branch= "main"
 
 # Google Custom Search Engine ID. Remove or comment out to disable search.
 # gcs_engine_id = "d72aa9b2712488cc3"
@@ -141,12 +141,20 @@ offlineSearch = false
 prism_syntax_highlighting = false
 
 [[params.versions]]
+url = "/v1.10/"
+version = "v1.10 (pre-release)"
+
+[[params.versions]]
+url = "/v1.9/"
+version = "v1.9 (latest)"
+
+[[params.versions]]
 url = "/v1.8/"
-version = "v1.8 (pre-release)"
+version = "v1.8"
 
 [[params.versions]]
 url = "/v1.7/"
-version = "v1.7 (latest)"
+version = "v1.7"
 
 [[params.versions]]
 url = "/v1.6/"

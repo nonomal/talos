@@ -16,11 +16,12 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn/github"
 	"github.com/google/go-containerregistry/pkg/crane"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/google"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/siderolabs/gen/value"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/siderolabs/talos/internal/pkg/secureboot/measure"
+	"github.com/siderolabs/talos/internal/pkg/measure"
 	"github.com/siderolabs/talos/internal/pkg/secureboot/pesign"
 	"github.com/siderolabs/talos/pkg/archiver"
 	"github.com/siderolabs/talos/pkg/imager/profile/internal/signer/aws"
@@ -54,6 +55,8 @@ type Input struct {
 	RPiFirmware FileAsset `yaml:"rpiFirmware,omitempty"`
 	// Base installer image to mutate.
 	BaseInstaller ContainerAsset `yaml:"baseInstaller,omitempty"`
+	// ImageCache is an image cache to inject into the asset.
+	ImageCache ContainerAsset `yaml:"imageCache,omitempty"`
 	// OverlayInstaller is an overlay image to inject into the installer.
 	//
 	// OverlayInstaller architecture should match the output installer architecture.
@@ -96,6 +99,8 @@ type SecureBootAssets struct {
 	PlatformKeyPath    string `yaml:"platformKeyPath,omitempty"`
 	KeyExchangeKeyPath string `yaml:"keyExchangeKeyPath,omitempty"`
 	SignatureKeyPath   string `yaml:"signatureKeyPath,omitempty"`
+	// Optional, auto-enrollment include well-known UEFI (Microsoft) certs.
+	IncludeWellKnownCerts bool `yaml:"includeWellKnownCerts,omitempty"`
 }
 
 // SigningKeyAndCertificate describes a signing key & certificate.
@@ -204,15 +209,15 @@ func (i *Input) FillDefaults(arch, version string, secureboot bool) {
 		i.BaseInstaller.ImageRef = fmt.Sprintf("%s:%s", images.DefaultInstallerImageRepository, version)
 	}
 
+	if i.SDStub == zeroFileAsset {
+		i.SDStub.Path = fmt.Sprintf(constants.SDStubAssetPath, arch)
+	}
+
+	if i.SDBoot == zeroFileAsset {
+		i.SDBoot.Path = fmt.Sprintf(constants.SDBootAssetPath, arch)
+	}
+
 	if secureboot {
-		if i.SDStub == zeroFileAsset {
-			i.SDStub.Path = fmt.Sprintf(constants.SDStubAssetPath, arch)
-		}
-
-		if i.SDBoot == zeroFileAsset {
-			i.SDBoot.Path = fmt.Sprintf(constants.SDBootAssetPath, arch)
-		}
-
 		if i.SecureBoot == nil {
 			i.SecureBoot = &SecureBootAssets{}
 		}
@@ -276,6 +281,7 @@ func (c *ContainerAsset) Pull(ctx context.Context, arch string, printf func(stri
 			authn.NewMultiKeychain(
 				authn.DefaultKeychain,
 				github.Keychain,
+				google.Keychain,
 			),
 		),
 	}
@@ -351,13 +357,25 @@ func (c *ContainerAsset) Extract(ctx context.Context, destination, arch string, 
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
-		defer w.Close() //nolint:errcheck
+		if exportErr := crane.Export(img, w); exportErr != nil {
+			w.CloseWithError(exportErr)
 
-		return crane.Export(img, w)
+			return exportErr
+		}
+
+		w.Close() //nolint:errcheck
+
+		return nil
 	})
 
 	eg.Go(func() error {
-		return archiver.Untar(ctx, r, destination)
+		if untarErr := archiver.Untar(ctx, r, destination); untarErr != nil {
+			r.CloseWithError(untarErr)
+
+			return untarErr
+		}
+
+		return nil
 	})
 
 	return eg.Wait()

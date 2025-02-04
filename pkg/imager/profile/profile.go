@@ -17,7 +17,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/overlay"
 )
 
-//go:generate deep-copy -type Profile -header-file ../../../hack/boilerplate.txt -o deep_copy.generated.go .
+//go:generate deep-copy -type Profile -type SecureBootAssets -header-file ../../../hack/boilerplate.txt -o deep_copy.generated.go .
 
 //go:generate enumer -type OutputKind,OutFormat,DiskFormat,SDBootEnrollKeys -linecomment -text
 
@@ -100,14 +100,14 @@ func (p *Profile) Validate() error {
 		// cmdline supports all kinds of customization
 	case OutKindImage:
 		// Image supports all kinds of customization
+		if p.Output.ImageOptions == nil {
+			return errors.New("image options are required for image output")
+		}
+
 		if p.Output.ImageOptions.DiskSize == 0 {
 			return errors.New("disk size is required for image output")
 		}
 	case OutKindInstaller:
-		if !p.SecureBootEnabled() && len(p.Customization.ExtraKernelArgs) > 0 {
-			return fmt.Errorf("customization of kernel args is not supported for %s output in !secureboot mode", p.Output.Kind)
-		}
-
 		if len(p.Customization.MetaContents) > 0 {
 			return fmt.Errorf("customization of meta partition is not supported for %s output", p.Output.Kind)
 		}
@@ -124,9 +124,6 @@ func (p *Profile) Validate() error {
 			return fmt.Errorf("customization of meta partition is not supported for %s output", p.Output.Kind)
 		}
 	case OutKindUKI:
-		if !p.SecureBootEnabled() {
-			return fmt.Errorf("!secureboot is not supported for %s output", p.Output.Kind)
-		}
 	}
 
 	return nil

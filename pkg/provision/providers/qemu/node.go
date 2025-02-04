@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
 	"github.com/siderolabs/gen/xslices"
+	"github.com/siderolabs/go-cmd/pkg/cmd"
 	"github.com/siderolabs/go-procfs/procfs"
 
 	"github.com/siderolabs/talos/pkg/machinery/constants"
@@ -69,7 +71,7 @@ func (p *provisioner) createNode(state *vm.State, clusterReq provision.ClusterRe
 
 	cmdline := procfs.NewCmdline("")
 
-	cmdline.SetAll(kernel.DefaultArgs)
+	cmdline.SetAll(kernel.DefaultArgs(nodeReq.Quirks))
 
 	// required to get kernel console
 	cmdline.Append("console", arch.Console())
@@ -84,19 +86,39 @@ func (p *provisioner) createNode(state *vm.State, clusterReq provision.ClusterRe
 
 	// add overrides
 	if nodeReq.ExtraKernelArgs != nil {
-		if err = cmdline.AppendAll(nodeReq.ExtraKernelArgs.Strings()); err != nil {
+		if err = cmdline.AppendAll(
+			nodeReq.ExtraKernelArgs.Strings(),
+			procfs.WithDeleteNegatedArgs(),
+		); err != nil {
 			return provision.NodeInfo{}, err
 		}
 	}
 
-	var nodeConfig string
+	if opts.WithDebugShell {
+		cmdline.Append("talos.debugshell", "")
+	}
+
+	var (
+		nodeConfig   string
+		extraISOPath string
+	)
 
 	if !nodeReq.SkipInjectingConfig {
-		cmdline.Append("talos.config", "{TALOS_CONFIG_URL}") // to be patched by launcher
-
 		nodeConfig, err = nodeReq.Config.EncodeString()
 		if err != nil {
 			return provision.NodeInfo{}, err
+		}
+
+		switch nodeReq.ConfigInjectionMethod {
+		case provision.ConfigInjectionMethodHTTP:
+			cmdline.Append("talos.config", "{TALOS_CONFIG_URL}") // to be patched by launcher
+		case provision.ConfigInjectionMethodMetalISO:
+			cmdline.Append("talos.config", "metal-iso")
+
+			extraISOPath, err = p.createMetalConfigISO(state, nodeReq.Name, nodeConfig)
+			if err != nil {
+				return provision.NodeInfo{}, fmt.Errorf("error creating metal-iso: %w", err)
+			}
 		}
 	}
 
@@ -110,13 +132,17 @@ func (p *provisioner) createNode(state *vm.State, clusterReq provision.ClusterRe
 		return provision.NodeInfo{}, fmt.Errorf("error finding listen address for the API: %w", err)
 	}
 
-	defaultBootOrder := "cn"
+	defaultBootOrder := "cd"
 	if nodeReq.DefaultBootOrder != "" {
 		defaultBootOrder = nodeReq.DefaultBootOrder
 	}
 
-	// backwards compatibility, set Driver if not set
+	// backwards compatibility, set Driver/BlockSize if not set
 	for i := range nodeReq.Disks {
+		if nodeReq.Disks[i].BlockSize == 0 {
+			nodeReq.Disks[i].BlockSize = 512
+		}
+
 		if nodeReq.Disks[i].Driver != "" {
 			continue
 		}
@@ -129,15 +155,18 @@ func (p *provisioner) createNode(state *vm.State, clusterReq provision.ClusterRe
 	}
 
 	launchConfig := LaunchConfig{
-		QemuExecutable: arch.QemuExecutable(),
-		DiskPaths:      diskPaths,
+		ArchitectureData: arch,
+		DiskPaths:        diskPaths,
 		DiskDrivers: xslices.Map(nodeReq.Disks, func(disk *provision.Disk) string {
 			return disk.Driver
+		}),
+		DiskBlockSizes: xslices.Map(nodeReq.Disks, func(disk *provision.Disk) uint {
+			return disk.BlockSize
 		}),
 		VCPUCount:         vcpuCount,
 		MemSize:           memSize,
 		KernelArgs:        cmdline.String(),
-		MachineType:       arch.QemuMachine(),
+		ExtraISOPath:      extraISOPath,
 		PFlashImages:      pflashImages,
 		MonitorPath:       state.GetRelativePath(fmt.Sprintf("%s.monitor", nodeReq.Name)),
 		EnableKVM:         opts.TargetArch == runtime.GOARCH,
@@ -158,6 +187,8 @@ func (p *provisioner) createNode(state *vm.State, clusterReq provision.ClusterRe
 		TFTPServer:        nodeReq.TFTPServer,
 		IPXEBootFileName:  nodeReq.IPXEBootFilename,
 		APIPort:           apiPort,
+		WithDebugShell:    opts.WithDebugShell,
+		IOMMUEnabled:      opts.IOMMUEnabled,
 	}
 
 	if clusterReq.IPXEBootScript != "" {
@@ -194,10 +225,12 @@ func (p *provisioner) createNode(state *vm.State, clusterReq provision.ClusterRe
 		launchConfig.Hostname = nodeReq.Name
 	}
 
-	if !(nodeReq.PXEBooted || launchConfig.IPXEBootFileName != "") {
+	if !nodeReq.PXEBooted && launchConfig.IPXEBootFileName == "" {
 		launchConfig.KernelImagePath = strings.ReplaceAll(clusterReq.KernelPath, constants.ArchVariable, opts.TargetArch)
 		launchConfig.InitrdPath = strings.ReplaceAll(clusterReq.InitramfsPath, constants.ArchVariable, opts.TargetArch)
 		launchConfig.ISOPath = strings.ReplaceAll(clusterReq.ISOPath, constants.ArchVariable, opts.TargetArch)
+		launchConfig.USBPath = strings.ReplaceAll(clusterReq.USBPath, constants.ArchVariable, opts.TargetArch)
+		launchConfig.UKIPath = strings.ReplaceAll(clusterReq.UKIPath, constants.ArchVariable, opts.TargetArch)
 	}
 
 	launchConfig.StatePath, err = state.StatePath()
@@ -304,4 +337,26 @@ func (p *provisioner) populateSystemDisk(disks []string, clusterReq provision.Cl
 	}
 
 	return nil
+}
+
+func (p *provisioner) createMetalConfigISO(state *vm.State, nodeName, config string) (string, error) {
+	isoPath := state.GetRelativePath(nodeName + "-metal-config.iso")
+
+	tmpDir, err := os.MkdirTemp("", "talos-metal-config-iso")
+	if err != nil {
+		return "", err
+	}
+
+	defer os.RemoveAll(tmpDir) //nolint:errcheck
+
+	if err = os.WriteFile(filepath.Join(tmpDir, "config.yaml"), []byte(config), 0o644); err != nil {
+		return "", err
+	}
+
+	_, err = cmd.Run("mkisofs", "-joliet", "-rock", "-volid", "metal-iso", "-output", isoPath, tmpDir)
+	if err != nil {
+		return "", err
+	}
+
+	return isoPath, nil
 }

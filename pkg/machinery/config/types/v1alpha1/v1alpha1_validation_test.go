@@ -807,7 +807,7 @@ func TestValidate(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "1 error occurred:\n\t* interface \"eth1\" is declared as part of two bonds: \"bond0\" and \"bond1\"\n\n",
+			expectedError: "1 error occurred:\n\t* interface \"eth1\" is declared as part of two separate links: \"bond0\" and \"bond1\"\n\n",
 		},
 		{
 			name: "BondSlaveAddressing",
@@ -827,15 +827,7 @@ func TestValidate(t *testing.T) {
 									BondInterfaces: []string{
 										"eth0",
 										"eth1",
-									},
-								},
-							},
-							{
-								DeviceInterface: "bond0",
-								DeviceBond: &v1alpha1.Bond{
-									BondInterfaces: []string{
-										"eth0",
-										"eth1",
+										"eth2",
 									},
 								},
 							},
@@ -864,8 +856,67 @@ func TestValidate(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "2 errors occurred:\n\t* [networking.os.device] \"eth0\": bonded interface shouldn't have any addressing methods configured\n" +
-				"\t* [networking.os.device] \"eth1\": bonded interface shouldn't have any addressing methods configured\n\n",
+			expectedError: "3 errors occurred:\n" +
+				"\t* [networking.os.device] \"eth0\": bonded/bridged interface shouldn't have any addressing methods configured\n" +
+				"\t* [networking.os.device] \"eth1\": bonded/bridged interface shouldn't have any addressing methods configured\n" +
+				"\t* [networking.os.device] \"eth2\": bonded/bridged interface shouldn't have any addressing methods configured\n" +
+				"\n",
+			expectedWarnings: []string{
+				"\"eth2\": machine.network.interface.cidr is deprecated, please use machine.network.interface.addresses",
+			},
+		},
+		{
+			name: "BridgeSlaveAddressing",
+			config: &v1alpha1.Config{
+				ConfigVersion: "v1alpha1",
+				MachineConfig: &v1alpha1.MachineConfig{
+					MachineType: "controlplane",
+					MachineCA: &x509.PEMEncodedCertificateAndKey{
+						Crt: []byte("foo"),
+						Key: []byte("bar"),
+					},
+					MachineNetwork: &v1alpha1.NetworkConfig{
+						NetworkInterfaces: []*v1alpha1.Device{
+							{
+								DeviceInterface: "br0",
+								DeviceBridge: &v1alpha1.Bridge{
+									BridgedInterfaces: []string{
+										"eth0",
+										"eth1",
+										"eth2",
+									},
+								},
+							},
+							{
+								DeviceInterface: "eth0",
+								DeviceDHCP:      pointer.To(true),
+							},
+							{
+								DeviceInterface: "eth1",
+								DeviceAddresses: []string{
+									"192.168.0.1/24",
+								},
+							},
+							{
+								DeviceInterface: "eth2",
+								DeviceCIDR:      "192.168.1.1/24",
+							},
+						},
+					},
+				},
+				ClusterConfig: &v1alpha1.ClusterConfig{
+					ControlPlane: &v1alpha1.ControlPlaneConfig{
+						Endpoint: &v1alpha1.Endpoint{
+							endpointURL,
+						},
+					},
+				},
+			},
+			expectedError: "3 errors occurred:\n" +
+				"\t* [networking.os.device] \"eth0\": bonded/bridged interface shouldn't have any addressing methods configured\n" +
+				"\t* [networking.os.device] \"eth1\": bonded/bridged interface shouldn't have any addressing methods configured\n" +
+				"\t* [networking.os.device] \"eth2\": bonded/bridged interface shouldn't have any addressing methods configured\n" +
+				"\n",
 			expectedWarnings: []string{
 				"\"eth2\": machine.network.interface.cidr is deprecated, please use machine.network.interface.addresses",
 			},
@@ -911,7 +962,7 @@ func TestValidate(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "1 error occurred:\n\t* interface \"eth1\" is declared as part of two bridges: \"br0\" and \"br1\"\n\n",
+			expectedError: "1 error occurred:\n\t* interface \"eth1\" is declared as part of two separate links: \"br0\" and \"br1\"\n\n",
 		},
 		{
 			name: "InterfaceIsBothBridgeAndBond",
@@ -994,7 +1045,7 @@ func TestValidate(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "1 error occurred:\n\t* interface \"eth1\" is declared as part of an interface and a bond: \"br0\" and \"bond0\"\n\n",
+			expectedError: "1 error occurred:\n\t* interface \"eth1\" is declared as part of two separate links: \"br0\" and \"bond0\"\n\n",
 		},
 		{
 			name: "Wireguard",
@@ -1744,6 +1795,145 @@ func TestValidate(t *testing.T) {
 				},
 			},
 			expectedError: "3 errors occurred:\n\t* apiserver resource validation failed: unsupported pod resource \"invalid1\"\n\t* controller-manager resource validation failed: unsupported pod resource \"invalid2\"\n\t* scheduler resource validation failed: unsupported pod resource \"invalid3\"\n\n", //nolint:lll
+		},
+		{
+			name: "ControlPlaneInvalidAuthorizationConfig",
+			config: &v1alpha1.Config{
+				ConfigVersion: "v1alpha1",
+				MachineConfig: &v1alpha1.MachineConfig{
+					MachineType: "controlplane",
+					MachineCA: &x509.PEMEncodedCertificateAndKey{
+						Crt: []byte("foo"),
+						Key: []byte("bar"),
+					},
+				},
+				ClusterConfig: &v1alpha1.ClusterConfig{
+					ControlPlane: &v1alpha1.ControlPlaneConfig{
+						Endpoint: &v1alpha1.Endpoint{
+							endpointURL,
+						},
+					},
+					APIServerConfig: &v1alpha1.APIServerConfig{
+						AuthorizationConfigConfig: []*v1alpha1.AuthorizationConfigAuthorizerConfig{
+							{
+								AuthorizerName: "foo",
+							},
+						},
+					},
+				},
+			},
+			expectedError: "1 error occurred:\n\t* apiserver authorization config validation failed: authorizer type must be set\n\n",
+		},
+		{
+			name: "ControlPlaneAuthorizationConfigWithAuthorizationModeFlag",
+			config: &v1alpha1.Config{
+				ConfigVersion: "v1alpha1",
+				MachineConfig: &v1alpha1.MachineConfig{
+					MachineType: "controlplane",
+					MachineCA: &x509.PEMEncodedCertificateAndKey{
+						Crt: []byte("foo"),
+						Key: []byte("bar"),
+					},
+				},
+				ClusterConfig: &v1alpha1.ClusterConfig{
+					ControlPlane: &v1alpha1.ControlPlaneConfig{
+						Endpoint: &v1alpha1.Endpoint{
+							endpointURL,
+						},
+					},
+					APIServerConfig: &v1alpha1.APIServerConfig{
+						AuthorizationConfigConfig: []*v1alpha1.AuthorizationConfigAuthorizerConfig{},
+						ExtraArgsConfig: map[string]string{
+							"authorization-mode": "Node",
+						},
+					},
+				},
+			},
+			expectedError: "1 error occurred:\n\t* authorization-mode cannot be used in conjunction with AuthorizationConfig, use eitherr AuthorizationConfig or authorization-mode\n\n",
+		},
+		{
+			name: "ControlPlaneAuthorizationConfigWithAuthorizationWebhook",
+			config: &v1alpha1.Config{
+				ConfigVersion: "v1alpha1",
+				MachineConfig: &v1alpha1.MachineConfig{
+					MachineType: "controlplane",
+					MachineCA: &x509.PEMEncodedCertificateAndKey{
+						Crt: []byte("foo"),
+						Key: []byte("bar"),
+					},
+				},
+				ClusterConfig: &v1alpha1.ClusterConfig{
+					ControlPlane: &v1alpha1.ControlPlaneConfig{
+						Endpoint: &v1alpha1.Endpoint{
+							endpointURL,
+						},
+					},
+					APIServerConfig: &v1alpha1.APIServerConfig{
+						AuthorizationConfigConfig: []*v1alpha1.AuthorizationConfigAuthorizerConfig{},
+						ExtraArgsConfig: map[string]string{
+							"authorization-webhook-version": "v1",
+						},
+					},
+				},
+			},
+			expectedError: "1 error occurred:\n\t* authorization-webhook-* flags cannot be used in conjunction with AuthorizationConfig, use either AuthorizationConfig or authorization-webhook-* flags\n\n",
+		},
+		{
+			name: "MachineBaseRuntimeSpecOverrides",
+			config: &v1alpha1.Config{
+				ConfigVersion: "v1alpha1",
+				MachineConfig: &v1alpha1.MachineConfig{
+					MachineType: "controlplane",
+					MachineCA: &x509.PEMEncodedCertificateAndKey{
+						Crt: []byte("foo"),
+						Key: []byte("bar"),
+					},
+					MachineBaseRuntimeSpecOverrides: v1alpha1.Unstructured{
+						Object: map[string]any{
+							"process": map[string]any{
+								"rlimits": []map[string]any{
+									{
+										"type": "RLIMIT_NOFILE",
+										"hard": 1024,
+										"soft": 1024,
+									},
+								},
+							},
+						},
+					},
+				},
+				ClusterConfig: &v1alpha1.ClusterConfig{
+					ControlPlane: &v1alpha1.ControlPlaneConfig{
+						Endpoint: &v1alpha1.Endpoint{
+							endpointURL,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "MachineFeaturesInvalidAddressSortingAlgorithm",
+			config: &v1alpha1.Config{
+				ConfigVersion: "v1alpha1",
+				MachineConfig: &v1alpha1.MachineConfig{
+					MachineType: "controlplane",
+					MachineCA: &x509.PEMEncodedCertificateAndKey{
+						Crt: []byte("foo"),
+						Key: []byte("bar"),
+					},
+					MachineFeatures: &v1alpha1.FeaturesConfig{
+						FeatureNodeAddressSortAlgorithm: "xyz",
+					},
+				},
+				ClusterConfig: &v1alpha1.ClusterConfig{
+					ControlPlane: &v1alpha1.ControlPlaneConfig{
+						Endpoint: &v1alpha1.Endpoint{
+							endpointURL,
+						},
+					},
+				},
+			},
+			expectedError: "1 error occurred:\n\t* invalid node address sort algorithm: xyz does not belong to AddressSortAlgorithm values\n\n",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

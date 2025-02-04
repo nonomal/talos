@@ -28,13 +28,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"gopkg.in/yaml.v3"
 
-	"github.com/siderolabs/talos/cmd/talosctl/pkg/talos/helpers"
 	"github.com/siderolabs/talos/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/pkg/cluster"
 	"github.com/siderolabs/talos/pkg/cluster/check"
 	"github.com/siderolabs/talos/pkg/machinery/api/common"
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
-	"github.com/siderolabs/talos/pkg/machinery/api/storage"
 	"github.com/siderolabs/talos/pkg/machinery/client"
 	clientconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
 	"github.com/siderolabs/talos/pkg/machinery/config"
@@ -44,6 +42,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 	configres "github.com/siderolabs/talos/pkg/machinery/resources/config"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 	"github.com/siderolabs/talos/pkg/provision"
@@ -280,10 +279,14 @@ func (apiSuite *APISuite) ReadBootIDWithRetry(ctx context.Context, timeout time.
 // AssertRebooted verifies that node got rebooted as result of running some API call.
 //
 // Verification happens via reading boot_id of the node.
-func (apiSuite *APISuite) AssertRebooted(ctx context.Context, node string, rebootFunc func(nodeCtx context.Context) error, timeout time.Duration) {
+func (apiSuite *APISuite) AssertRebooted(ctx context.Context, node string, rebootFunc func(nodeCtx context.Context) error, timeout time.Duration, extraHooks ...func(context.Context, string)) {
 	apiSuite.AssertRebootedNoChecks(ctx, node, rebootFunc, timeout)
 
 	apiSuite.WaitForBootDone(ctx)
+
+	for _, hook := range extraHooks {
+		hook(ctx, node)
+	}
 
 	if apiSuite.Cluster != nil {
 		// without cluster state we can't do deep checks, but basic reboot test still works
@@ -298,7 +301,7 @@ func (apiSuite *APISuite) AssertRebootedNoChecks(ctx context.Context, node strin
 	ctx, ctxCancel := context.WithTimeout(ctx, timeout)
 	defer ctxCancel()
 
-	nodeCtx := client.WithNodes(ctx, node)
+	nodeCtx := client.WithNode(ctx, node)
 
 	var (
 		bootIDBefore string
@@ -466,70 +469,37 @@ func (apiSuite *APISuite) ReadConfigFromNode(nodeCtx context.Context) (config.Pr
 	return cfg.Provider(), nil
 }
 
-// UserDisks returns list of user disks on with size greater than sizeGreaterThanGB and not having any partitions present.
-//
-//nolint:gocyclo
-func (apiSuite *APISuite) UserDisks(ctx context.Context, node string, sizeGreaterThanGB int) ([]string, error) {
-	nodeCtx := client.WithNodes(ctx, node)
+// UserDisks returns list of user disks not having any partitions present.
+func (apiSuite *APISuite) UserDisks(ctx context.Context, node string) []string {
+	nodeCtx := client.WithNode(ctx, node)
 
-	resp, err := apiSuite.Client.Disks(nodeCtx)
-	if err != nil {
-		return nil, err
+	disks, err := safe.ReaderListAll[*block.Disk](nodeCtx, apiSuite.Client.COSI)
+	apiSuite.Require().NoError(err, "failed to list disks")
+
+	var candidateDisks []string //nolint:prealloc
+
+	for disk := range disks.All() {
+		// skip CD-ROM, readonly and disks witho	for iteratorut transport (this is usually lvms, md, zfs devices etc)
+		// also skip iscsi disks (these are created in tests)
+		if disk.TypedSpec().Readonly || disk.TypedSpec().CDROM || disk.TypedSpec().Transport == "" || disk.TypedSpec().Transport == "iscsi" {
+			continue
+		}
+
+		candidateDisks = append(candidateDisks, disk.Metadata().ID())
 	}
 
-	var disks []string
+	var availableDisks []string
 
-	blockDeviceInUse := func(deviceName string) (bool, error) {
-		devicePart := strings.Split(deviceName, "/dev/")[1]
+	for _, disk := range candidateDisks {
+		discoveredVolume, err := safe.ReaderGetByID[*block.DiscoveredVolume](nodeCtx, apiSuite.Client.COSI, disk)
+		apiSuite.Require().NoError(err, "failed to get discovered volume")
 
-		// https://unix.stackexchange.com/questions/111779/how-to-find-out-easily-whether-a-block-device-or-a-part-of-it-is-mounted-someh
-		// this was the only easy way I could find to check if the block device is already in use by something like raid
-		stream, err := apiSuite.Client.LS(nodeCtx, &machineapi.ListRequest{
-			Root: fmt.Sprintf("/sys/block/%s/holders", devicePart),
-		})
-		if err != nil {
-			return false, err
-		}
-
-		counter := 0
-
-		if err = helpers.ReadGRPCStream(stream, func(info *machineapi.FileInfo, node string, multipleNodes bool) error {
-			counter++
-
-			return nil
-		}); err != nil {
-			return false, err
-		}
-
-		if counter > 1 {
-			return true, nil
-		}
-
-		return false, nil
-	}
-
-	for _, msg := range resp.Messages {
-		for _, disk := range msg.Disks {
-			if disk.SystemDisk || disk.Readonly || disk.Type == storage.Disk_CD {
-				continue
-			}
-
-			if disk.BusPath == "/virtual" {
-				continue
-			}
-
-			blockDeviceUsed, err := blockDeviceInUse(disk.DeviceName)
-			if err != nil {
-				return nil, err
-			}
-
-			if disk.Size > uint64(sizeGreaterThanGB)*1024*1024*1024 && !blockDeviceUsed {
-				disks = append(disks, disk.DeviceName)
-			}
+		if discoveredVolume.TypedSpec().Name == "" {
+			availableDisks = append(availableDisks, discoveredVolume.TypedSpec().DevPath)
 		}
 	}
 
-	return disks, nil
+	return availableDisks
 }
 
 // AssertServicesRunning verifies that services are running on the node.
@@ -565,6 +535,7 @@ func (apiSuite *APISuite) AssertExpectedModules(ctx context.Context, node string
 	for scanner.Scan() {
 		loadedModules = append(loadedModules, strings.Split(scanner.Text(), " ")[0])
 	}
+
 	apiSuite.Require().NoError(scanner.Err())
 
 	fileReader, err = apiSuite.Client.Read(nodeCtx, fmt.Sprintf("/lib/modules/%s/modules.dep", constants.DefaultKernelVersion))
@@ -581,6 +552,7 @@ func (apiSuite *APISuite) AssertExpectedModules(ctx context.Context, node string
 	for scanner.Scan() {
 		modulesDep = append(modulesDep, filepath.Base(strings.Split(scanner.Text(), ":")[0]))
 	}
+
 	apiSuite.Require().NoError(scanner.Err())
 
 	for module, moduleDep := range expectedModules {
@@ -782,6 +754,26 @@ func (apiSuite *APISuite) DumpLogs(ctx context.Context, node string, service, pa
 			apiSuite.T().Logf("%s (%s): %s", node, service, scanner.Text())
 		}
 	}
+}
+
+// ReadCmdline reads cmdline from the node.
+func (apiSuite *APISuite) ReadCmdline(nodeCtx context.Context) string {
+	reader, err := apiSuite.Client.Read(nodeCtx, "/proc/cmdline")
+	apiSuite.Require().NoError(err)
+
+	defer reader.Close() //nolint:errcheck
+
+	body, err := io.ReadAll(reader)
+	apiSuite.Require().NoError(err)
+
+	cmdline := strings.TrimSpace(string(body))
+
+	_, err = io.Copy(io.Discard, reader)
+	apiSuite.Require().NoError(err)
+
+	apiSuite.Require().NoError(reader.Close())
+
+	return cmdline
 }
 
 // TearDownSuite closes Talos API client.

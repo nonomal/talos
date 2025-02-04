@@ -3,6 +3,7 @@ syntax = "proto3";
 package talos.resource.definitions.network;
 
 option go_package = "github.com/siderolabs/talos/pkg/machinery/api/resource/definitions/network";
+option java_package = "dev.talos.api.resource.definitions.network";
 
 import "common/common.proto";
 import "google/protobuf/duration.proto";
@@ -73,7 +74,7 @@ message BridgeMasterSpec {
   BridgeVLANSpec vlan = 2;
 }
 
-// BridgeSlave contains a bond's master name and slave index.
+// BridgeSlave contains the name of the master bridge of a bridged interface
 message BridgeSlave {
   string master_name = 1;
 }
@@ -183,6 +184,8 @@ message LinkStatusSpec {
   BondMasterSpec bond_master = 28;
   WireguardSpec wireguard = 29;
   bytes permanent_addr = 30;
+  string alias = 31;
+  repeated string alt_names = 32;
 }
 
 // NfTablesAddressMatch describes the match on the IP address.
@@ -273,9 +276,15 @@ message NodeAddressFilterSpec {
   repeated common.NetIPPrefix exclude_subnets = 2;
 }
 
+// NodeAddressSortAlgorithmSpec describes a filter for NodeAddresses.
+message NodeAddressSortAlgorithmSpec {
+  talos.resource.definitions.enums.NethelpersAddressSortAlgorithm algorithm = 1;
+}
+
 // NodeAddressSpec describes a set of node addresses.
 message NodeAddressSpec {
   repeated common.NetIPPrefix addresses = 1;
+  talos.resource.definitions.enums.NethelpersAddressSortAlgorithm sort_algorithm = 2;
 }
 
 // OperatorSpecSpec describes DNS resolvers.
@@ -315,11 +324,13 @@ message ProbeStatusSpec {
 message ResolverSpecSpec {
   repeated common.NetIP dns_servers = 1;
   talos.resource.definitions.enums.NetworkConfigLayer config_layer = 2;
+  repeated string search_domains = 3;
 }
 
 // ResolverStatusSpec describes DNS resolvers.
 message ResolverStatusSpec {
   repeated common.NetIP dns_servers = 1;
+  repeated string search_domains = 2;
 }
 
 // RouteSpecSpec describes the route.

@@ -130,11 +130,14 @@ func (r *Runtime) CanApplyImmediate(cfg config.Provider) error {
 	// * .machine.registries (note that auth is not applied immediately, containerd limitation)
 	// * .machine.pods
 	// * .machine.seccompProfiles
+	// * .machine.nodeAnnotations
 	// * .machine.nodeLabels
 	// * .machine.nodeTaints
 	// * .machine.features.kubernetesTalosAPIAccess
 	// * .machine.features.kubePrism
-	// * .machine.features.localDNS
+	// * .machine.features.hostDNS
+	// * .machine.features.imageCache
+	// * .machine.features.nodeAddressSortAlgorithm
 	newConfig.ConfigDebug = currentConfig.ConfigDebug
 	newConfig.ClusterConfig = currentConfig.ClusterConfig
 
@@ -154,6 +157,7 @@ func (r *Runtime) CanApplyImmediate(cfg config.Provider) error {
 		newConfig.MachineConfig.MachineRegistries = currentConfig.MachineConfig.MachineRegistries
 		newConfig.MachineConfig.MachinePods = currentConfig.MachineConfig.MachinePods
 		newConfig.MachineConfig.MachineSeccompProfiles = currentConfig.MachineConfig.MachineSeccompProfiles
+		newConfig.MachineConfig.MachineNodeAnnotations = currentConfig.MachineConfig.MachineNodeAnnotations
 		newConfig.MachineConfig.MachineNodeLabels = currentConfig.MachineConfig.MachineNodeLabels
 		newConfig.MachineConfig.MachineNodeTaints = currentConfig.MachineConfig.MachineNodeTaints
 
@@ -161,6 +165,8 @@ func (r *Runtime) CanApplyImmediate(cfg config.Provider) error {
 			newConfig.MachineConfig.MachineFeatures.KubernetesTalosAPIAccessConfig = currentConfig.MachineConfig.MachineFeatures.KubernetesTalosAPIAccessConfig
 			newConfig.MachineConfig.MachineFeatures.KubePrismSupport = currentConfig.MachineConfig.MachineFeatures.KubePrismSupport
 			newConfig.MachineConfig.MachineFeatures.HostDNSSupport = currentConfig.MachineConfig.MachineFeatures.HostDNSSupport
+			newConfig.MachineConfig.MachineFeatures.ImageCacheSupport = currentConfig.MachineConfig.MachineFeatures.ImageCacheSupport
+			newConfig.MachineConfig.MachineFeatures.FeatureNodeAddressSortAlgorithm = currentConfig.MachineConfig.MachineFeatures.FeatureNodeAddressSortAlgorithm
 		}
 	}
 
@@ -193,12 +199,16 @@ func (r *Runtime) Logging() runtime.LoggingManager {
 
 // NodeName implements the Runtime interface.
 func (r *Runtime) NodeName() (string, error) {
-	nodenameResource, err := r.s.V1Alpha2().Resources().Get(context.Background(), resource.NewMetadata(k8s.NamespaceName, k8s.NodenameType, k8s.NodenameID, resource.VersionUndefined))
+	nodenameResource, err := safe.ReaderGet[*k8s.Nodename](
+		context.Background(),
+		r.s.V1Alpha2().Resources(),
+		resource.NewMetadata(k8s.NamespaceName, k8s.NodenameType, k8s.NodenameID, resource.VersionUndefined),
+	)
 	if err != nil {
 		return "", fmt.Errorf("error getting nodename resource: %w", err)
 	}
 
-	return nodenameResource.(*k8s.Nodename).TypedSpec().Nodename, nil
+	return nodenameResource.TypedSpec().Nodename, nil
 }
 
 // IsBootstrapAllowed checks for CRI to be up, checked in the bootstrap method.
