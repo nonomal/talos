@@ -27,6 +27,11 @@ func New(talosVersion string) Quirks {
 	}}
 }
 
+// Version returns the Talos version.
+func (q Quirks) Version() *semver.Version {
+	return q.v
+}
+
 var minVersionResetOption = semver.MustParse("1.4.0")
 
 // SupportsResetGRUBOption returns true if the Talos version supports the reset option in GRUB menu (image and ISO).
@@ -37,6 +42,18 @@ func (q Quirks) SupportsResetGRUBOption() bool {
 	}
 
 	return q.v.GTE(minVersionResetOption)
+}
+
+var minVersionUKI = semver.MustParse("1.5.0")
+
+// SupportsUKI returns true if the Talos version supports building UKIs.
+func (q Quirks) SupportsUKI() bool {
+	// if the version doesn't parse, we assume it's latest Talos
+	if q.v == nil {
+		return true
+	}
+
+	return q.v.GTE(minVersionUKI)
 }
 
 var minVersionCompressedMETA = semver.MustParse("1.6.3")
@@ -75,6 +92,18 @@ func (q Quirks) UseZSTDCompression() bool {
 	return q.v.GTE(minVersionZstd)
 }
 
+var minVersionISOLabel = semver.MustParse("1.8.0")
+
+// SupportsISOLabel returns true if the Talos version supports setting the ISO label.
+func (q Quirks) SupportsISOLabel() bool {
+	// if the version doesn't parse, we assume it's latest Talos
+	if q.v == nil {
+		return true
+	}
+
+	return q.v.GTE(minVersionISOLabel)
+}
+
 var minVersionMultidoc = semver.MustParse("1.5.0")
 
 // SupportsMultidoc returns true if the Talos version supports multidoc machine configs.
@@ -85,4 +114,63 @@ func (q Quirks) SupportsMultidoc() bool {
 	}
 
 	return q.v.GTE(minVersionMultidoc)
+}
+
+// maxVersionMetalPlatformConsoleTTYS0Dropped is the version that dropped console=ttyS0 for metal image.
+var maxVersionMetalPlatformConsoleTTYS0Dropped = semver.MustParse("1.8.0")
+
+// SupportsMetalPlatformConsoleTTYS0 returns true if the Talos version supports already has console=ttyS0 kernel argument.
+func (q Quirks) SupportsMetalPlatformConsoleTTYS0() bool {
+	// if the version doesn't parse, we assume it's latest Talos
+	if q.v == nil {
+		return false
+	}
+
+	return q.v.LT(maxVersionMetalPlatformConsoleTTYS0Dropped)
+}
+
+// minVersionSupportsHalfIfInstalled is the version that supports half if installed.
+var minVersionSupportsHalfIfInstalled = semver.MustParse("1.8.0")
+
+// SupportsHaltIfInstalled returns true if the Talos version supports half if installed.
+func (q Quirks) SupportsHaltIfInstalled() bool {
+	return q.v.GTE(minVersionSupportsHalfIfInstalled)
+}
+
+var minVersionSkipDataPartitions = semver.MustParse("1.8.0")
+
+// SkipDataPartitions returns true if the Talos version supports creating EPHEMERAL/STATE partitions on its own.
+func (q Quirks) SkipDataPartitions() bool {
+	// if the version doesn't parse, we assume it's latest Talos
+	if q.v == nil {
+		return true
+	}
+
+	return q.v.GTE(minVersionSkipDataPartitions)
+}
+
+// minVersionSELinux is the version that enabled SELinux and added respective parameters.
+var minVersionSELinux = semver.MustParse("1.10.0")
+
+// SupportsSELinux returns true if the Talos version enables selinux=1 by default.
+func (q Quirks) SupportsSELinux() bool {
+	// if the version doesn't parse, we assume it's latest Talos
+	if q.v == nil {
+		return true
+	}
+
+	return q.v.GTE(minVersionSELinux)
+}
+
+// minVersionUseSDBootOnly is the version that supports only SDBoot for UEFI.
+var minTalosVersionUseSDBootOnly = semver.MustParse("1.10.0")
+
+// UseSDBootForUEFI returns true if the Talos version supports only SDBoot for UEFI.
+func (q Quirks) UseSDBootForUEFI() bool {
+	// if the version doesn't parse, we assume it's latest Talos
+	if q.v == nil {
+		return false
+	}
+
+	return q.v.GTE(minTalosVersionUseSDBootOnly)
 }

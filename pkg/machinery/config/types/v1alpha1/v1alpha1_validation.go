@@ -5,23 +5,27 @@
 package v1alpha1
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
-	"os"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/hashicorp/go-multierror"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	sideronet "github.com/siderolabs/net"
 
 	"github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
+	"github.com/siderolabs/talos/pkg/machinery/config/types/block/blockhelpers"
 	"github.com/siderolabs/talos/pkg/machinery/config/validation"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/kubelet"
@@ -94,24 +98,13 @@ func (c *Config) Validate(mode validation.RuntimeMode, options ...validation.Opt
 		if c.MachineConfig.MachineInstall == nil {
 			result = multierror.Append(result, fmt.Errorf("install instructions are required in %q mode", mode))
 		} else {
-			if opts.Local {
-				if c.MachineConfig.MachineInstall.InstallDisk == "" && len(c.MachineConfig.MachineInstall.DiskMatchers()) == 0 {
-					result = multierror.Append(result, errors.New("either install disk or diskSelector should be defined"))
-				}
-			} else {
-				disk, err := c.MachineConfig.MachineInstall.Disk()
+			matcher, err := c.MachineConfig.MachineInstall.DiskMatchExpression()
+			if err != nil {
+				result = multierror.Append(result, fmt.Errorf("install disk selector is invalid: %w", err))
+			}
 
-				if err != nil {
-					result = multierror.Append(result, err)
-				} else {
-					if disk == "" {
-						result = multierror.Append(result, fmt.Errorf("an install disk is required in %q mode", mode))
-					}
-
-					if _, err := os.Stat(disk); os.IsNotExist(err) {
-						result = multierror.Append(result, fmt.Errorf("specified install disk does not exist: %q", c.MachineConfig.MachineInstall.InstallDisk))
-					}
-				}
+			if c.MachineConfig.MachineInstall.InstallDisk == "" && matcher == nil {
+				result = multierror.Append(result, errors.New("either install disk or diskSelector should be defined"))
 			}
 		}
 	}
@@ -180,26 +173,16 @@ func (c *Config) Validate(mode validation.RuntimeMode, options ...validation.Opt
 	}
 
 	if c.MachineConfig.MachineNetwork != nil {
-		bondedInterfaces := map[string]string{}
-		bridgedInterfaces := map[string]string{}
+		allSecondaryInterfaces := map[string]string{}
 
 		for _, device := range c.MachineConfig.MachineNetwork.NetworkInterfaces {
 			if device.Bond() != nil && device.Bridge() != nil {
 				result = multierror.Append(result, fmt.Errorf("interface has both bridge and bond sections set %q: %w", device.Interface(), ErrMutuallyExclusive))
 			}
 
+			var myInterfaces []string
 			if device.Bond() != nil {
-				for _, iface := range device.Bond().Interfaces() {
-					if otherIface, exists := bondedInterfaces[iface]; exists && otherIface != device.Interface() {
-						result = multierror.Append(result, fmt.Errorf("interface %q is declared as part of two bonds: %q and %q", iface, otherIface, device.Interface()))
-					}
-
-					if bridgeIface, exists := bridgedInterfaces[iface]; exists {
-						result = multierror.Append(result, fmt.Errorf("interface %q is declared as part of an interface and a bond: %q and %q", iface, bridgeIface, device.Interface()))
-					}
-
-					bondedInterfaces[iface] = device.Interface()
-				}
+				myInterfaces = device.Bond().Interfaces()
 
 				if len(device.Bond().Interfaces()) > 0 && len(device.Bond().Selectors()) > 0 {
 					result = multierror.Append(result, fmt.Errorf("interface %q has both interfaces and selectors set: %w", device.Interface(), ErrMutuallyExclusive))
@@ -207,22 +190,20 @@ func (c *Config) Validate(mode validation.RuntimeMode, options ...validation.Opt
 			}
 
 			if device.Bridge() != nil {
-				for _, iface := range device.Bridge().Interfaces() {
-					if otherIface, exists := bridgedInterfaces[iface]; exists && otherIface != device.Interface() {
-						result = multierror.Append(result, fmt.Errorf("interface %q is declared as part of two bridges: %q and %q", iface, otherIface, device.Interface()))
-					}
+				myInterfaces = device.Bridge().Interfaces()
+			}
 
-					if bondIface, exists := bondedInterfaces[iface]; exists {
-						result = multierror.Append(result, fmt.Errorf("interface %q is declared as part of an interface and a bond: %q and %q", iface, bondIface, device.Interface()))
-					}
-
-					bridgedInterfaces[iface] = device.Interface()
+			for _, iface := range myInterfaces {
+				if otherIface, exists := allSecondaryInterfaces[iface]; exists && otherIface != device.Interface() {
+					result = multierror.Append(result, fmt.Errorf("interface %q is declared as part of two separate links: %q and %q", iface, otherIface, device.Interface()))
 				}
+
+				allSecondaryInterfaces[iface] = device.Interface()
 			}
 		}
 
 		for _, device := range c.MachineConfig.MachineNetwork.NetworkInterfaces {
-			warn, err := ValidateNetworkDevices(device, bondedInterfaces, CheckDeviceInterface, CheckDeviceAddressing, CheckDeviceRoutes)
+			warn, err := ValidateNetworkDevices(device, allSecondaryInterfaces, CheckDeviceInterface, CheckDeviceAddressing, CheckDeviceRoutes)
 			warnings = append(warnings, warn...)
 			result = multierror.Append(result, err)
 		}
@@ -234,12 +215,16 @@ func (c *Config) Validate(mode validation.RuntimeMode, options ...validation.Opt
 		}
 	}
 
-	if c.MachineConfig.MachineDisks != nil {
-		for _, disk := range c.MachineConfig.MachineDisks {
-			for i, pt := range disk.DiskPartitions {
-				if pt.DiskSize == 0 && i != len(disk.DiskPartitions)-1 {
-					result = multierror.Append(result, fmt.Errorf("partition for disk %q is set to occupy full disk, but it's not the last partition in the list", disk.Device()))
-				}
+	for i, disk := range c.MachineConfig.MachineDisks {
+		if disk == nil {
+			result = multierror.Append(result, fmt.Errorf("machine.disks[%d] is null", i))
+
+			continue
+		}
+
+		for i, pt := range disk.DiskPartitions {
+			if pt.DiskSize == 0 && i != len(disk.DiskPartitions)-1 {
+				result = multierror.Append(result, fmt.Errorf("partition for disk %q is set to occupy full disk, but it's not the last partition in the list", disk.Device()))
 			}
 		}
 	}
@@ -319,6 +304,10 @@ func (c *Config) Validate(mode validation.RuntimeMode, options ...validation.Opt
 		result = multierror.Append(result, fmt.Errorf("invalid machine node labels: %w", err))
 	}
 
+	if err := labels.ValidateAnnotations(c.MachineConfig.MachineNodeAnnotations); err != nil {
+		result = multierror.Append(result, fmt.Errorf("invalid machine node annotations: %w", err))
+	}
+
 	if err := labels.ValidateTaints(c.MachineConfig.MachineNodeTaints); err != nil {
 		result = multierror.Append(result, fmt.Errorf("invalid machine node taints: %w", err))
 	}
@@ -339,8 +328,40 @@ func (c *Config) Validate(mode validation.RuntimeMode, options ...validation.Opt
 		}
 	}
 
+	if c.MachineConfig.MachineFeatures != nil && c.MachineConfig.MachineFeatures.FeatureNodeAddressSortAlgorithm != "" {
+		if _, err := nethelpers.AddressSortAlgorithmString(c.MachineConfig.MachineFeatures.FeatureNodeAddressSortAlgorithm); err != nil {
+			result = multierror.Append(result, fmt.Errorf("invalid node address sort algorithm: %w", err))
+		}
+	}
+
 	if c.ConfigPersist != nil && !*c.ConfigPersist {
 		result = multierror.Append(result, errors.New(".persist should be enabled"))
+	}
+
+	if len(c.Machine().BaseRuntimeSpecOverrides()) > 0 {
+		// try to unmarshal the overrides to ensure they are valid
+		jsonSpec, err := json.Marshal(c.Machine().BaseRuntimeSpecOverrides())
+		if err != nil {
+			result = multierror.Append(result, fmt.Errorf("failed to marshal base runtime spec overrides: %w", err))
+		} else {
+			var ociSpec specs.Spec
+
+			if err := json.Unmarshal(jsonSpec, &ociSpec); err != nil {
+				result = multierror.Append(result, fmt.Errorf("failed to unmarshal base runtime spec overrides: %w", err))
+			}
+		}
+	}
+
+	for key, val := range c.MachineConfig.MachineRegistries.RegistryConfig {
+		if val == nil {
+			result = multierror.Append(result, fmt.Errorf("registries.config[%q] is null", key))
+		}
+	}
+
+	for key, val := range c.MachineConfig.MachineRegistries.RegistryMirrors {
+		if val == nil {
+			result = multierror.Append(result, fmt.Errorf("registries.mirrors[%q] is null", key))
+		}
 	}
 
 	if opts.Strict {
@@ -537,7 +558,7 @@ func (c *ClusterDiscoveryConfig) Validate(clusterCfg *ClusterConfig) error {
 
 // ValidateNetworkDevices runs the specified validation checks specific to the
 // network devices.
-func ValidateNetworkDevices(d *Device, pairedInterfaces map[string]string, checks ...NetworkDeviceCheck) ([]string, error) {
+func ValidateNetworkDevices(d *Device, secondaryInterfaces map[string]string, checks ...NetworkDeviceCheck) ([]string, error) {
 	var result *multierror.Error
 
 	if d == nil {
@@ -551,7 +572,7 @@ func ValidateNetworkDevices(d *Device, pairedInterfaces map[string]string, check
 	var warnings []string
 
 	for _, check := range checks {
-		warn, err := check(d, pairedInterfaces)
+		warn, err := check(d, secondaryInterfaces)
 		warnings = append(warnings, warn...)
 		result = multierror.Append(result, err)
 	}
@@ -784,7 +805,7 @@ func validateIPOrCIDR(address string) error {
 // has been specified.
 //
 //nolint:gocyclo
-func CheckDeviceAddressing(d *Device, bondedInterfaces map[string]string) ([]string, error) {
+func CheckDeviceAddressing(d *Device, secondaryInterfaces map[string]string) ([]string, error) {
 	var result *multierror.Error
 
 	if d == nil {
@@ -793,9 +814,9 @@ func CheckDeviceAddressing(d *Device, bondedInterfaces map[string]string) ([]str
 
 	var warnings []string
 
-	if _, bonded := bondedInterfaces[d.Interface()]; bonded {
+	if _, paired := secondaryInterfaces[d.Interface()]; paired {
 		if d.DHCP() || d.DeviceCIDR != "" || len(d.DeviceAddresses) > 0 || d.DeviceVIPConfig != nil {
-			result = multierror.Append(result, fmt.Errorf("[%s] %q: %s", "networking.os.device", d.DeviceInterface, "bonded interface shouldn't have any addressing methods configured"))
+			result = multierror.Append(result, fmt.Errorf("[%s] %q: %s", "networking.os.device", d.DeviceInterface, "bonded/bridged interface shouldn't have any addressing methods configured"))
 		}
 	}
 
@@ -923,4 +944,34 @@ func (e *EtcdConfig) Validate() error {
 	}
 
 	return result.ErrorOrNil()
+}
+
+// RuntimeValidate validates the config in runtime context.
+//
+// In runtime context, resource state is available.
+func (c *Config) RuntimeValidate(ctx context.Context, st state.State, mode validation.RuntimeMode, opt ...validation.Option) ([]string, error) {
+	var (
+		warnings []string
+		result   *multierror.Error
+	)
+
+	if c.MachineConfig != nil {
+		if mode.RequiresInstall() && c.MachineConfig.MachineInstall != nil {
+			diskExpr, err := c.MachineConfig.MachineInstall.DiskMatchExpression()
+			if err != nil {
+				result = multierror.Append(result, fmt.Errorf("install disk selector is invalid: %w", err))
+			} else if diskExpr != nil {
+				matchedDisks, err := blockhelpers.MatchDisks(ctx, st, diskExpr)
+				if err != nil {
+					result = multierror.Append(result, err)
+				}
+
+				if len(matchedDisks) == 0 {
+					result = multierror.Append(result, fmt.Errorf("no disks matched the expression: %s", diskExpr))
+				}
+			}
+		}
+	}
+
+	return warnings, result.ErrorOrNil()
 }

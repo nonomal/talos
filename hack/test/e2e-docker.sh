@@ -27,14 +27,13 @@ function create_cluster {
 }
 
 function destroy_cluster() {
-  "${TALOSCTL}" cluster destroy --name "${CLUSTER_NAME}" --provisioner "${PROVISIONER}"
+  "${TALOSCTL}" cluster destroy --name "${CLUSTER_NAME}" --provisioner "${PROVISIONER}" --save-support-archive-path=/tmp/support-${CLUSTER_NAME}.zip
 }
+
+trap destroy_cluster SIGINT EXIT
 
 create_cluster
 get_kubeconfig
 ${KUBECTL} config set-cluster e2e-docker --server https://10.5.0.2:6443
 run_talos_integration_test_docker
 run_kubernetes_integration_test
-
-# Unlike other local e2e tests, we don't destroy the cluster there as it is used by CAPI and AWS/GCP e2e tests later.
-# destroy_cluster

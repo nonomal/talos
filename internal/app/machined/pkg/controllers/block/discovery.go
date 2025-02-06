@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/cosi-project/runtime/pkg/controller"
@@ -17,6 +16,7 @@ import (
 	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/siderolabs/gen/maps"
 	"github.com/siderolabs/go-blockdevice/v2/blkid"
+	"github.com/siderolabs/go-blockdevice/v2/partitioning"
 	"go.uber.org/zap"
 
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
@@ -38,6 +38,11 @@ func (ctrl *DiscoveryController) Inputs() []controller.Input {
 			Type:      block.DeviceType,
 			Kind:      controller.InputWeak,
 		},
+		{
+			Namespace: block.NamespaceName,
+			Type:      block.DiscoveryRefreshRequestType,
+			Kind:      controller.InputWeak,
+		},
 	}
 }
 
@@ -48,17 +53,24 @@ func (ctrl *DiscoveryController) Outputs() []controller.Output {
 			Type: block.DiscoveredVolumeType,
 			Kind: controller.OutputExclusive,
 		},
+		{
+			Type: block.DiscoveryRefreshStatusType,
+			Kind: controller.OutputExclusive,
+		},
 	}
 }
 
 // Run implements controller.Controller interface.
 //
-//nolint:gocyclo
+//nolint:gocyclo,cyclop
 func (ctrl *DiscoveryController) Run(ctx context.Context, r controller.Runtime, logger *zap.Logger) error {
 	// lastObservedGenerations holds the last observed generation of each device.
 	//
 	// when the generation of a device changes, the device might have changed and might need to be re-probed.
 	lastObservedGenerations := map[string]int{}
+
+	// whenever new DiscoveryRefresh requests are received, the devices are re-probed.
+	var lastObservedDiscoveryRefreshRequest int
 
 	// nextRescan holds the pool of devices to be rescanned in the next batch.
 	nextRescan := map[string]int{}
@@ -86,7 +98,27 @@ func (ctrl *DiscoveryController) Run(ctx context.Context, r controller.Runtime, 
 					nextRescan[id] = lastObservedGenerations[id]
 				}
 			}
+
+			if err := safe.WriterModify(ctx, r, block.NewDiscoveryRefreshStatus(block.NamespaceName, block.RefreshID), func(status *block.DiscoveryRefreshStatus) error {
+				status.TypedSpec().Request = lastObservedDiscoveryRefreshRequest
+
+				return nil
+			}); err != nil {
+				return fmt.Errorf("failed to write discovery refresh status: %w", err)
+			}
 		case <-r.EventCh():
+			refreshRequest, err := safe.ReaderGetByID[*block.DiscoveryRefreshRequest](ctx, r, block.RefreshID)
+			if err != nil && !state.IsNotFoundError(err) {
+				return fmt.Errorf("failed to get refresh request: %w", err)
+			}
+
+			if refreshRequest != nil && refreshRequest.TypedSpec().Request != lastObservedDiscoveryRefreshRequest {
+				lastObservedDiscoveryRefreshRequest = refreshRequest.TypedSpec().Request
+
+				// force re-probe all devices
+				clear(lastObservedGenerations)
+			}
+
 			devices, err := safe.ReaderListAll[*block.Device](ctx, r)
 			if err != nil {
 				return fmt.Errorf("failed to list devices: %w", err)
@@ -95,8 +127,13 @@ func (ctrl *DiscoveryController) Run(ctx context.Context, r controller.Runtime, 
 			parents := map[string]string{}
 			allDevices := map[string]struct{}{}
 
-			for iterator := devices.Iterator(); iterator.Next(); {
-				device := iterator.Value()
+			for device := range devices.All() {
+				if device.TypedSpec().Major == 1 {
+					// ignore ram disks (/dev/ramX), major number is 1
+					// ref: https://www.kernel.org/doc/Documentation/admin-guide/devices.txt
+					// ref: https://github.com/util-linux/util-linux/blob/c0207d354ee47fb56acfa64b03b5b559bb301280/misc-utils/lsblk.c#L2697-L2699
+					continue
+				}
 
 				allDevices[device.Metadata().ID()] = struct{}{}
 
@@ -169,11 +206,16 @@ func (ctrl *DiscoveryController) rescan(ctx context.Context, r controller.Runtim
 		logger.Debug("probed device", zap.String("id", id), zap.Any("info", info))
 
 		if err = safe.WriterModify(ctx, r, block.NewDiscoveredVolume(block.NamespaceName, id), func(dv *block.DiscoveredVolume) error {
+			dv.TypedSpec().DevPath = filepath.Join("/dev", id)
 			dv.TypedSpec().Type = device.TypedSpec().Type
 			dv.TypedSpec().DevicePath = device.TypedSpec().DevicePath
 			dv.TypedSpec().Parent = device.TypedSpec().Parent
 
-			dv.TypedSpec().Size = info.Size
+			if device.TypedSpec().Parent != "" {
+				dv.TypedSpec().ParentDevPath = filepath.Join("/dev", device.TypedSpec().Parent)
+			}
+
+			dv.TypedSpec().SetSize(info.Size)
 			dv.TypedSpec().SectorSize = info.SectorSize
 			dv.TypedSpec().IOSize = info.IOSize
 
@@ -187,18 +229,16 @@ func (ctrl *DiscoveryController) rescan(ctx context.Context, r controller.Runtim
 		touchedIDs[id] = struct{}{}
 
 		for _, nested := range info.Parts {
-			partID := partitionID(id, nested.PartitionIndex)
+			partID := partitioning.DevName(id, nested.PartitionIndex)
 
 			if err = safe.WriterModify(ctx, r, block.NewDiscoveredVolume(block.NamespaceName, partID), func(dv *block.DiscoveredVolume) error {
 				dv.TypedSpec().Type = "partition"
+				dv.TypedSpec().DevPath = filepath.Join("/dev", partID)
 				dv.TypedSpec().DevicePath = filepath.Join(device.TypedSpec().DevicePath, partID)
 				dv.TypedSpec().Parent = id
+				dv.TypedSpec().ParentDevPath = filepath.Join("/dev", id)
 
-				dv.TypedSpec().Size = nested.ProbedSize
-
-				if dv.TypedSpec().Size == 0 {
-					dv.TypedSpec().Size = nested.PartitionSize
-				}
+				dv.TypedSpec().SetSize(nested.PartitionSize)
 
 				dv.TypedSpec().SectorSize = info.SectorSize
 				dv.TypedSpec().IOSize = info.IOSize
@@ -240,9 +280,7 @@ func (ctrl *DiscoveryController) rescan(ctx context.Context, r controller.Runtim
 		return nil, fmt.Errorf("failed to list discovered volumes: %w", err)
 	}
 
-	for iterator := discoveredVolumes.Iterator(); iterator.Next(); {
-		dv := iterator.Value()
-
+	for dv := range discoveredVolumes.All() {
 		if _, ok := touchedIDs[dv.Metadata().ID()]; ok {
 			continue
 		}
@@ -286,14 +324,4 @@ func (ctrl *DiscoveryController) fillDiscoveredVolumeFromInfo(dv *block.Discover
 	dv.TypedSpec().BlockSize = info.BlockSize
 	dv.TypedSpec().FilesystemBlockSize = info.FilesystemBlockSize
 	dv.TypedSpec().ProbedSize = info.ProbedSize
-}
-
-func partitionID(devname string, part uint) string {
-	result := devname
-
-	if len(result) > 0 && result[len(result)-1] >= '0' && result[len(result)-1] <= '9' {
-		result += "p"
-	}
-
-	return result + strconv.FormatUint(uint64(part), 10)
 }

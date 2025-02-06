@@ -11,7 +11,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -36,11 +35,11 @@ var allSuites []suite.TestingSuite
 
 // Flag values.
 var (
-	failFast          bool
-	crashdumpEnabled  bool
-	trustedBoot       bool
-	extensionsQEMU    bool
-	extensionsNvidia  bool
+	failFast         bool
+	trustedBoot      bool
+	extensionsQEMU   bool
+	extensionsNvidia bool
+
 	talosConfig       string
 	endpoint          string
 	k8sEndpoint       string
@@ -48,10 +47,14 @@ var (
 	expectedGoVersion string
 	talosctlPath      string
 	kubectlPath       string
+	helmPath          string
+	kubeStrPath       string
 	provisionerName   string
 	clusterName       string
 	stateDir          string
 	talosImage        string
+	csiTestName       string
+	csiTestTimeout    string
 )
 
 // TestIntegration ...
@@ -90,7 +93,6 @@ func TestIntegration(t *testing.T) {
 	}
 
 	provision_test.DefaultSettings.CurrentVersion = expectedVersion
-	provision_test.DefaultSettings.CrashdumpEnabled = crashdumpEnabled
 
 	for _, s := range allSuites {
 		if configuredSuite, ok := s.(base.ConfiguredSuite); ok {
@@ -103,10 +105,14 @@ func TestIntegration(t *testing.T) {
 				GoVersion:        expectedGoVersion,
 				TalosctlPath:     talosctlPath,
 				KubectlPath:      kubectlPath,
+				HelmPath:         helmPath,
+				KubeStrPath:      kubeStrPath,
 				ExtensionsQEMU:   extensionsQEMU,
 				ExtensionsNvidia: extensionsNvidia,
 				TrustedBoot:      trustedBoot,
 				TalosImage:       talosImage,
+				CSITestName:      csiTestName,
+				CSITestTimeout:   csiTestTimeout,
 			})
 		}
 
@@ -125,12 +131,6 @@ func TestIntegration(t *testing.T) {
 			break
 		}
 	}
-
-	if t.Failed() && crashdumpEnabled && cluster != nil && provisioner != nil {
-		// if provisioner & cluster are available,
-		// debugging failed test is easier with crashdump
-		provisioner.CrashDump(context.Background(), cluster, os.Stderr)
-	}
 }
 
 func init() {
@@ -142,7 +142,6 @@ func init() {
 	}
 
 	flag.BoolVar(&failFast, "talos.failfast", false, "fail the test run on the first failed test")
-	flag.BoolVar(&crashdumpEnabled, "talos.crashdump", false, "print crashdump on test failure (only if provisioner is enabled)")
 	flag.BoolVar(&trustedBoot, "talos.trustedboot", false, "enable tests for trusted boot mode")
 	flag.BoolVar(&extensionsQEMU, "talos.extensions.qemu", false, "enable tests for qemu extensions")
 	flag.BoolVar(&extensionsNvidia, "talos.extensions.nvidia", false, "enable tests for nvidia extensions")
@@ -166,7 +165,11 @@ func init() {
 	flag.StringVar(&expectedGoVersion, "talos.go.version", constants.GoVersion, "expected Talos version")
 	flag.StringVar(&talosctlPath, "talos.talosctlpath", "talosctl", "The path to 'talosctl' binary")
 	flag.StringVar(&kubectlPath, "talos.kubectlpath", "kubectl", "The path to 'kubectl' binary")
+	flag.StringVar(&helmPath, "talos.helmpath", "helm", "The path to 'helm' binary")
+	flag.StringVar(&kubeStrPath, "talos.kubestrpath", "kubestr", "The path to 'kubestr' binary")
 	flag.StringVar(&talosImage, "talos.image", images.DefaultTalosImageRepository, "The default 'talos' container image")
+	flag.StringVar(&csiTestName, "talos.csi", "", "CSI test to run")
+	flag.StringVar(&csiTestTimeout, "talos.csi.timeout", "15m", "CSI test timeout")
 
 	flag.StringVar(&provision_test.DefaultSettings.CIDR, "talos.provision.cidr", provision_test.DefaultSettings.CIDR, "CIDR to use to provision clusters (provision tests only)")
 	flag.Var(&provision_test.DefaultSettings.RegistryMirrors, "talos.provision.registry-mirror", "registry mirrors to use (provision tests only)")

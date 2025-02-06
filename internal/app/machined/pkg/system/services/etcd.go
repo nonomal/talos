@@ -23,11 +23,11 @@ import (
 	"github.com/cosi-project/runtime/pkg/resource"
 	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/cosi-project/runtime/pkg/state"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/siderolabs/gen/xslices"
 	"github.com/siderolabs/go-retry/retry"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	snapshot "go.etcd.io/etcd/etcdutl/v3/snapshot"
+	"go.etcd.io/etcd/etcdutl/v3/snapshot"
 
 	"github.com/siderolabs/talos/internal/app/machined/pkg/runtime"
 	"github.com/siderolabs/talos/internal/app/machined/pkg/system"
@@ -36,10 +36,11 @@ import (
 	"github.com/siderolabs/talos/internal/app/machined/pkg/system/runner"
 	"github.com/siderolabs/talos/internal/app/machined/pkg/system/runner/containerd"
 	"github.com/siderolabs/talos/internal/app/machined/pkg/system/runner/restart"
+	"github.com/siderolabs/talos/internal/pkg/cgroup"
 	"github.com/siderolabs/talos/internal/pkg/containers/image"
 	"github.com/siderolabs/talos/internal/pkg/environment"
 	"github.com/siderolabs/talos/internal/pkg/etcd"
-	"github.com/siderolabs/talos/internal/pkg/meta"
+	"github.com/siderolabs/talos/internal/pkg/selinux"
 	"github.com/siderolabs/talos/pkg/argsbuilder"
 	"github.com/siderolabs/talos/pkg/conditions"
 	"github.com/siderolabs/talos/pkg/filetree"
@@ -47,7 +48,9 @@ import (
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/meta"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
+	"github.com/siderolabs/talos/pkg/machinery/resources/cri"
 	etcdresource "github.com/siderolabs/talos/pkg/machinery/resources/etcd"
 	"github.com/siderolabs/talos/pkg/machinery/resources/k8s"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
@@ -75,7 +78,7 @@ type Etcd struct {
 }
 
 // ID implements the Service interface.
-func (e *Etcd) ID(r runtime.Runtime) string {
+func (e *Etcd) ID(runtime.Runtime) string {
 	return "etcd"
 }
 
@@ -89,6 +92,11 @@ func (e *Etcd) PreFunc(ctx context.Context, r runtime.Runtime) error {
 
 	// Data path might exist after upgrade from previous version of Talos.
 	if err := os.Chmod(constants.EtcdDataPath, 0o700); err != nil {
+		return err
+	}
+
+	// Relabel in case of upgrade from older version or SELinux being disabled and then enabled.
+	if err := selinux.SetLabel(constants.EtcdDataPath, constants.EtcdDataSELinuxLabel); err != nil {
 		return err
 	}
 
@@ -113,7 +121,7 @@ func (e *Etcd) PreFunc(ctx context.Context, r runtime.Runtime) error {
 		return fmt.Errorf("failed to get etcd spec: %w", err)
 	}
 
-	img, err := image.Pull(containerdctx, r.Config().Machine().Registries(), client, spec.TypedSpec().Image, image.WithSkipIfAlreadyPulled())
+	img, err := image.Pull(containerdctx, cri.RegistryBuilder(r.State().V1Alpha2().Resources()), client, spec.TypedSpec().Image, image.WithSkipIfAlreadyPulled())
 	if err != nil {
 		return fmt.Errorf("failed to pull image %q: %w", spec.TypedSpec().Image, err)
 	}
@@ -148,7 +156,7 @@ func (e *Etcd) PreFunc(ctx context.Context, r runtime.Runtime) error {
 }
 
 // PostFunc implements the Service interface.
-func (e *Etcd) PostFunc(r runtime.Runtime, state events.ServiceState) (err error) {
+func (e *Etcd) PostFunc(runtime.Runtime, events.ServiceState) (err error) {
 	if e.promoteCtxCancel != nil {
 		e.promoteCtxCancel()
 	}
@@ -172,7 +180,7 @@ func (e *Etcd) Condition(r runtime.Runtime) conditions.Condition {
 }
 
 // DependsOn implements the Service interface.
-func (e *Etcd) DependsOn(r runtime.Runtime) []string {
+func (e *Etcd) DependsOn(runtime.Runtime) []string {
 	return []string{"cri"}
 }
 
@@ -219,11 +227,14 @@ func (e *Etcd) Runner(r runtime.Runtime) (runner.Runner, error) {
 		runner.WithContainerImage(e.imgRef),
 		runner.WithEnv(env),
 		runner.WithCgroupPath(constants.CgroupEtcd),
+		runner.WithSelinuxLabel(constants.SELinuxLabelEtcd),
 		runner.WithOCISpecOpts(
 			oci.WithDroppedCapabilities(cap.Known()),
 			oci.WithHostNamespace(specs.NetworkNamespace),
 			oci.WithMounts(mounts),
 			oci.WithUser(fmt.Sprintf("%d:%d", constants.EtcdUserID, constants.EtcdUserID)),
+			runner.WithMemoryReservation(constants.CgroupEtcdReservedMemory),
+			oci.WithCPUShares(uint64(cgroup.MilliCoresToShares(constants.CgroupEtcdMillicores))),
 		),
 		runner.WithOOMScoreAdj(-998),
 	),
@@ -326,12 +337,15 @@ func buildInitialCluster(ctx context.Context, r runtime.Runtime, name string, pe
 
 			// we "allow" a failure here since we want to fallthrough and attempt to add the etcd member regardless of
 			// whether we can print our IPs
-			currentAddresses, addrErr := r.State().V1Alpha2().Resources().Get(ctx,
-				resource.NewMetadata(network.NamespaceName, network.NodeAddressType, network.FilteredNodeAddressID(network.NodeAddressCurrentID, k8s.NodeAddressFilterNoK8s), resource.VersionUndefined))
+			currentAddresses, addrErr := safe.ReaderGet[*network.NodeAddress](
+				ctx,
+				r.State().V1Alpha2().Resources(),
+				resource.NewMetadata(network.NamespaceName, network.NodeAddressType, network.FilteredNodeAddressID(network.NodeAddressCurrentID, k8s.NodeAddressFilterNoK8s), resource.VersionUndefined),
+			)
 			if addrErr != nil {
 				log.Printf("error getting node addresses: %s", addrErr.Error())
 			} else {
-				ips := currentAddresses.(*network.NodeAddress).TypedSpec().IPs()
+				ips := currentAddresses.TypedSpec().IPs()
 				log.Printf("%s", ips)
 			}
 		}
@@ -598,7 +612,7 @@ func promoteMember(ctx context.Context, r runtime.Runtime, memberID uint64) erro
 		}
 
 		// try to iterate all available endpoints in the time available for an attempt
-		for range len(endpoints) {
+		for range endpoints {
 			select {
 			case <-ctx.Done():
 				return retry.ExpectedError(ctx.Err())

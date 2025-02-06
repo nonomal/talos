@@ -16,7 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 
-	"github.com/siderolabs/talos/internal/pkg/secureboot/measure"
+	"github.com/siderolabs/talos/internal/pkg/measure"
 )
 
 // KeySigner implements measure.RSAKey interface.
@@ -132,7 +132,7 @@ func NewPCRSigner(ctx context.Context, kmsKeyID, awsRegion string) (*KeySigner, 
 		return nil, fmt.Errorf("Public key is not valid: %w", err)
 	}
 
-	rsaKey := parsedKey.(*rsa.PublicKey) //nolint:errcheck
+	rsaKey := parsedKey.(*rsa.PublicKey)
 	if rsaKey.E == 0 {
 		return nil, fmt.Errorf("property e is empty")
 	}

@@ -51,14 +51,14 @@ func NewTLSConfig(ctx context.Context, resources state.State) (*TLSConfig, error
 		switch event.Type {
 		case state.Created, state.Updated:
 			// expected
-		case state.Destroyed, state.Bootstrapped:
+		case state.Destroyed, state.Bootstrapped, state.Noop:
 			// ignore, we'll get another event
 			continue
 		case state.Errored:
 			return nil, fmt.Errorf("error watching for API certificates: %w", event.Error)
 		}
 
-		apiCerts := event.Resource.(*secrets.API) //nolint:errcheck,forcetypeassert
+		apiCerts := event.Resource.(*secrets.API) //nolint:forcetypeassert
 
 		if err := provider.Update(apiCerts); err != nil {
 			return nil, err
@@ -85,14 +85,14 @@ func (tlsConfig *TLSConfig) Watch(ctx context.Context, onUpdate func()) error {
 		switch event.Type {
 		case state.Created, state.Updated:
 			// expected
-		case state.Destroyed, state.Bootstrapped:
+		case state.Destroyed, state.Bootstrapped, state.Noop:
 			// ignore, we'll get another event
 			continue
 		case state.Errored:
 			return fmt.Errorf("error watching API certificates: %w", event.Error)
 		}
 
-		apiCerts := event.Resource.(*secrets.API) //nolint:errcheck,forcetypeassert
+		apiCerts := event.Resource.(*secrets.API) //nolint:forcetypeassert
 
 		if err := tlsConfig.certificateProvider.Update(apiCerts); err != nil {
 			return fmt.Errorf("failed updating cert: %v", err)
@@ -193,7 +193,7 @@ func (p *certificateProvider) GetCACertPool() (*stdx509.CertPool, error) {
 	return p.caCertPool, nil
 }
 
-func (p *certificateProvider) GetCertificate(h *stdlibtls.ClientHelloInfo) (*stdlibtls.Certificate, error) {
+func (p *certificateProvider) GetCertificate(*stdlibtls.ClientHelloInfo) (*stdlibtls.Certificate, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

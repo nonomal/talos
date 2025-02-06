@@ -5,12 +5,11 @@ linkTitle: "Documentation"
 images: ["images/talos-dev-banner.png"]
 cascade:
   type: docs
-lastRelease: v1.8.0-alpha.0
-kubernetesRelease: "1.31.0-beta.0"
+lastRelease: v1.8.0
+kubernetesRelease: "1.31.1"
 prevKubernetesRelease: "1.30.0"
-nvidiaContainerToolkitRelease: "v1.14.5"
-nvidiaDriverRelease: "535.129.03"
-preRelease: true
+nvidiaContainerToolkitRelease: "v1.16.1"
+nvidiaDriverRelease: "535.183.06"
 ---
 
 ## Welcome
@@ -29,9 +28,6 @@ If you are just getting familiar with Talos, we recommend starting here:
 - GitHub: [repo](https://github.com/siderolabs/talos)
 - Support: Questions, bugs, feature requests [GitHub Discussions](https://github.com/siderolabs/talos/discussions)
 - Community Slack: Join our [slack channel](https://slack.dev.talos-systems.io)
-- Matrix: Join our Matrix channels:
-  - Community: [#talos:matrix.org](https://matrix.to/#/#talos:matrix.org)
-  - Community Support: [#talos-support:matrix.org](https://matrix.to/#/#talos-support:matrix.org)
 - Forum: [community](https://groups.google.com/a/siderolabs.com/forum/#!forum/community)
 - Twitter: [@SideroLabs](https://twitter.com/talossystems)
 - Email: [info@SideroLabs.com](mailto:info@SideroLabs.com)

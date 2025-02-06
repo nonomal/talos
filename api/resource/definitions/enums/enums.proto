@@ -3,6 +3,7 @@ syntax = "proto3";
 package talos.resource.definitions.enums;
 
 option go_package = "github.com/siderolabs/talos/pkg/machinery/api/resource/definitions/enums";
+option java_package = "dev.talos.api.resource.definitions.enums";
 
 // MachineType represents a machine type.
 enum MachineType {
@@ -34,6 +35,12 @@ enum NethelpersAddressFlag {
   ADDRESS_NO_PREFIX_ROUTE = 512;
   ADDRESS_MC_AUTO_JOIN = 1024;
   ADDRESS_STABLE_PRIVACY = 2048;
+}
+
+// NethelpersAddressSortAlgorithm is an internal address sorting algorithm.
+enum NethelpersAddressSortAlgorithm {
+  ADDRESS_SORT_ALGORITHM_V1 = 0;
+  ADDRESS_SORT_ALGORITHM_V2 = 1;
 }
 
 // NethelpersADSelect is ADSelect.
@@ -351,6 +358,64 @@ enum NethelpersVLANProtocol {
   NETHELPERS_VLANPROTOCOL_UNSPECIFIED = 0;
   VLAN_PROTOCOL8021_Q = 33024;
   VLAN_PROTOCOL8021_AD = 34984;
+}
+
+// BlockEncryptionKeyType describes encryption key type.
+enum BlockEncryptionKeyType {
+  ENCRYPTION_KEY_STATIC = 0;
+  ENCRYPTION_KEY_NODE_ID = 1;
+  ENCRYPTION_KEY_KMS = 2;
+  ENCRYPTION_KEY_TPM = 3;
+}
+
+// BlockEncryptionProviderType describes encryption provider type.
+enum BlockEncryptionProviderType {
+  ENCRYPTION_PROVIDER_NONE = 0;
+  ENCRYPTION_PROVIDER_LUKS2 = 1;
+}
+
+// BlockFilesystemType describes filesystem type.
+enum BlockFilesystemType {
+  FILESYSTEM_TYPE_NONE = 0;
+  FILESYSTEM_TYPE_XFS = 1;
+  FILESYSTEM_TYPE_VFAT = 2;
+  FILESYSTEM_TYPE_EXT4 = 3;
+  FILESYSTEM_TYPE_ISO9660 = 4;
+}
+
+// BlockVolumePhase describes volume phase.
+enum BlockVolumePhase {
+  VOLUME_PHASE_WAITING = 0;
+  VOLUME_PHASE_FAILED = 1;
+  VOLUME_PHASE_MISSING = 2;
+  VOLUME_PHASE_LOCATED = 3;
+  VOLUME_PHASE_PROVISIONED = 4;
+  VOLUME_PHASE_PREPARED = 5;
+  VOLUME_PHASE_READY = 6;
+  VOLUME_PHASE_CLOSED = 7;
+}
+
+// BlockVolumeType describes volume type.
+enum BlockVolumeType {
+  VOLUME_TYPE_PARTITION = 0;
+  VOLUME_TYPE_DISK = 1;
+  VOLUME_TYPE_TMPFS = 2;
+}
+
+// CriImageCacheStatus describes image cache status type.
+enum CriImageCacheStatus {
+  IMAGE_CACHE_STATUS_UNKNOWN = 0;
+  IMAGE_CACHE_STATUS_DISABLED = 1;
+  IMAGE_CACHE_STATUS_PREPARING = 2;
+  IMAGE_CACHE_STATUS_READY = 3;
+}
+
+// CriImageCacheCopyStatus describes image cache copy status type.
+enum CriImageCacheCopyStatus {
+  IMAGE_CACHE_COPY_STATUS_UNKNOWN = 0;
+  IMAGE_CACHE_COPY_STATUS_SKIPPED = 1;
+  IMAGE_CACHE_COPY_STATUS_PENDING = 2;
+  IMAGE_CACHE_COPY_STATUS_READY = 3;
 }
 
 // KubespanPeerState is KubeSpan peer current state.

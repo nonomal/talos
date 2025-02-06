@@ -6,7 +6,6 @@ package iso
 
 import (
 	"bytes"
-	"context"
 	_ "embed"
 	"fmt"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"text/template"
 
 	"github.com/siderolabs/go-cmd/pkg/cmd"
+	"github.com/siderolabs/go-copy/copy"
 
 	"github.com/siderolabs/talos/pkg/imager/utils"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
@@ -56,9 +56,9 @@ var loaderConfigTemplate string
 // The ISO created supports only booting in UEFI mode, and supports SecureBoot.
 //
 //nolint:gocyclo,cyclop
-func CreateUEFI(printf func(string, ...any), options UEFIOptions) error {
+func (options Options) CreateUEFI(printf func(string, ...any)) (Generator, error) {
 	if err := os.MkdirAll(options.ScratchDir, 0o755); err != nil {
-		return err
+		return nil, err
 	}
 
 	printf("preparing raw image")
@@ -74,14 +74,14 @@ func CreateUEFI(printf func(string, ...any), options UEFIOptions) error {
 	} {
 		st, err := os.Stat(path)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		isoSize += (st.Size() + mib - 1) / mib * mib
 	}
 
 	if err := utils.CreateRawDisk(printf, efiBootImg, isoSize); err != nil {
-		return err
+		return nil, err
 	}
 
 	printf("preparing loader.conf")
@@ -93,7 +93,7 @@ func CreateUEFI(printf func(string, ...any), options UEFIOptions) error {
 	}{
 		SecureBootEnroll: options.SDBootSecureBootEnrollKeys,
 	}); err != nil {
-		return fmt.Errorf("error rendering loader.conf: %w", err)
+		return nil, fmt.Errorf("error rendering loader.conf: %w", err)
 	}
 
 	printf("creating vFAT EFI image")
@@ -104,102 +104,110 @@ func CreateUEFI(printf func(string, ...any), options UEFIOptions) error {
 	}
 
 	if err := makefs.VFAT(efiBootImg, fopts...); err != nil {
-		return err
+		return nil, err
 	}
 
-	if _, err := cmd.Run("mmd", "-i", efiBootImg, "::EFI"); err != nil {
-		return err
+	if err := os.MkdirAll(filepath.Join(options.ScratchDir, "EFI/Linux"), 0o755); err != nil {
+		return nil, err
 	}
 
-	if _, err := cmd.Run("mmd", "-i", efiBootImg, "::EFI/BOOT"); err != nil {
-		return err
+	if err := os.MkdirAll(filepath.Join(options.ScratchDir, "EFI/BOOT"), 0o755); err != nil {
+		return nil, err
 	}
 
-	if _, err := cmd.Run("mmd", "-i", efiBootImg, "::EFI/Linux"); err != nil {
-		return err
+	if err := os.MkdirAll(filepath.Join(options.ScratchDir, "loader"), 0o755); err != nil {
+		return nil, err
 	}
 
-	if _, err := cmd.Run("mmd", "-i", efiBootImg, "::EFI/keys"); err != nil {
-		return err
-	}
-
-	if _, err := cmd.Run("mmd", "-i", efiBootImg, "::loader"); err != nil {
-		return err
-	}
-
-	if _, err := cmd.Run("mmd", "-i", efiBootImg, "::loader/keys"); err != nil {
-		return err
-	}
-
-	if _, err := cmd.Run("mmd", "-i", efiBootImg, "::loader/keys/auto"); err != nil {
-		return err
-	}
-
-	efiBootPath := "::EFI/BOOT/BOOTX64.EFI"
+	efiBootPath := "EFI/BOOT/BOOTX64.EFI"
 
 	if options.Arch == "arm64" {
-		efiBootPath = "::EFI/BOOT/BOOTAA64.EFI"
+		efiBootPath = "EFI/BOOT/BOOTAA64.EFI"
 	}
 
-	if _, err := cmd.Run("mcopy", "-i", efiBootImg, options.SDBootPath, efiBootPath); err != nil {
-		return err
+	if err := copy.File(options.SDBootPath, filepath.Join(options.ScratchDir, efiBootPath)); err != nil {
+		return nil, err
 	}
 
-	if _, err := cmd.Run("mcopy", "-i", efiBootImg, options.UKIPath, fmt.Sprintf("::EFI/Linux/Talos-%s.efi", options.Version)); err != nil {
-		return err
+	if err := copy.File(options.UKIPath, filepath.Join(options.ScratchDir, fmt.Sprintf("EFI/Linux/Talos-%s.efi", options.Version))); err != nil {
+		return nil, err
 	}
 
-	if _, err := cmd.RunContext(
-		cmd.WithStdin(context.Background(), &loaderConfigOut),
-		"mcopy", "-i", efiBootImg, "-", "::loader/loader.conf",
-	); err != nil {
-		return err
+	if err := os.WriteFile(filepath.Join(options.ScratchDir, "loader/loader.conf"), loaderConfigOut.Bytes(), 0o644); err != nil {
+		return nil, err
 	}
 
-	if _, err := cmd.Run("mcopy", "-i", efiBootImg, options.UKISigningCertDerPath, "::EFI/keys/uki-signing-cert.der"); err != nil {
-		return err
+	if options.UKISigningCertDerPath != "" {
+		if err := os.MkdirAll(filepath.Join(options.ScratchDir, "EFI/keys"), 0o755); err != nil {
+			return nil, err
+		}
+
+		if err := copy.File(options.UKISigningCertDerPath, filepath.Join(options.ScratchDir, "EFI/keys/uki-signing-cert.der")); err != nil {
+			return nil, err
+		}
+	}
+
+	if options.PlatformKeyPath != "" || options.KeyExchangeKeyPath != "" || options.SignatureKeyPath != "" {
+		if err := os.MkdirAll(filepath.Join(options.ScratchDir, "loader/keys/auto"), 0o755); err != nil {
+			return nil, err
+		}
 	}
 
 	if options.PlatformKeyPath != "" {
-		if _, err := cmd.Run("mcopy", "-i", efiBootImg, options.PlatformKeyPath, filepath.Join("::loader/keys/auto", constants.PlatformKeyAsset)); err != nil {
-			return err
+		if err := copy.File(options.PlatformKeyPath, filepath.Join(options.ScratchDir, "loader/keys/auto", constants.PlatformKeyAsset)); err != nil {
+			return nil, err
 		}
 	}
 
 	if options.KeyExchangeKeyPath != "" {
-		if _, err := cmd.Run("mcopy", "-i", efiBootImg, options.KeyExchangeKeyPath, filepath.Join("::loader/keys/auto", constants.KeyExchangeKeyAsset)); err != nil {
-			return err
+		if err := copy.File(options.KeyExchangeKeyPath, filepath.Join(options.ScratchDir, "loader/keys/auto", constants.KeyExchangeKeyAsset)); err != nil {
+			return nil, err
 		}
 	}
 
 	if options.SignatureKeyPath != "" {
-		if _, err := cmd.Run("mcopy", "-i", efiBootImg, options.SignatureKeyPath, filepath.Join("::loader/keys/auto", constants.SignatureKeyAsset)); err != nil {
-			return err
+		if err := copy.File(options.SignatureKeyPath, filepath.Join(options.ScratchDir, "loader/keys/auto", constants.SignatureKeyAsset)); err != nil {
+			return nil, err
 		}
+	}
+
+	if _, err := cmd.Run(
+		"mcopy",
+		"-s", // recursive
+		"-p", // preserve attributes
+		"-Q", // quit on error
+		"-m", // preserve modification time
+		"-i",
+		efiBootImg,
+		filepath.Join(options.ScratchDir, "EFI"),
+		filepath.Join(options.ScratchDir, "loader"),
+		"::",
+	); err != nil {
+		return nil, err
 	}
 
 	// fixup directory timestamps recursively
 	if err := utils.TouchFiles(printf, options.ScratchDir); err != nil {
-		return err
+		return nil, err
 	}
 
 	printf("creating ISO image")
 
-	if _, err := cmd.Run(
-		"xorriso",
-		"-as",
-		"mkisofs",
-		"-V",
-		"Talos Secure Boot ISO",
-		"-e",
-		"efiboot.img",
-		"-no-emul-boot",
-		"-o",
-		options.OutPath,
-		options.ScratchDir,
-	); err != nil {
-		return err
-	}
-
-	return nil
+	return &ExecutorOptions{
+		Command: "xorrisofs",
+		Version: options.Version,
+		Arguments: []string{
+			"-e", "--interval:appended_partition_2:all::", // use appended partition 2 for EFI
+			"-append_partition", "2", "0xef", efiBootImg,
+			"-partition_cyl_align", // pad partition to cylinder boundary
+			"all",
+			"-partition_offset", "16", // support booting from USB
+			"-iso_mbr_part_type", "0x83", // just to have more clear info when doing a fdisk -l
+			"-no-emul-boot",
+			"-m", "efiboot.img", // exclude the EFI boot image from the ISO
+			"-o", options.OutPath,
+			options.ScratchDir,
+			"--",
+		},
+	}, nil
 }

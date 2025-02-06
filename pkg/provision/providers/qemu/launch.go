@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/alexflint/go-filemutex"
 	"github.com/containernetworking/cni/libcni"
@@ -26,7 +27,7 @@ import (
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/google/uuid"
 	"github.com/siderolabs/gen/xslices"
-	"github.com/siderolabs/go-blockdevice/blockdevice/partition/gpt"
+	"github.com/siderolabs/go-blockdevice/v2/blkid"
 	sideronet "github.com/siderolabs/net"
 
 	"github.com/siderolabs/talos/pkg/provision"
@@ -41,15 +42,17 @@ type LaunchConfig struct {
 	// VM options
 	DiskPaths         []string
 	DiskDrivers       []string
+	DiskBlockSizes    []uint
 	VCPUCount         int64
 	MemSize           int64
-	QemuExecutable    string
 	KernelImagePath   string
 	InitrdPath        string
 	ISOPath           string
+	USBPath           string
+	UKIPath           string
+	ExtraISOPath      string
 	PFlashImages      []string
 	KernelArgs        string
-	MachineType       string
 	MonitorPath       string
 	DefaultBootOrder  string
 	EnableKVM         bool
@@ -57,6 +60,9 @@ type LaunchConfig struct {
 	TPM2Config        tpm2Config
 	NodeUUID          uuid.UUID
 	BadRTC            bool
+	ArchitectureData  Arch
+	WithDebugShell    bool
+	IOMMUEnabled      bool
 
 	// Talos config
 	Config string
@@ -274,27 +280,12 @@ func withCNI(ctx context.Context, config *LaunchConfig, f func(config *LaunchCon
 }
 
 func checkPartitions(config *LaunchConfig) (bool, error) {
-	disk, err := os.Open(config.DiskPaths[0])
+	info, err := blkid.ProbePath(config.DiskPaths[0], blkid.WithSectorSize(config.DiskBlockSizes[0]))
 	if err != nil {
-		return false, fmt.Errorf("failed to open disk file %w", err)
+		return false, fmt.Errorf("error probing disk: %w", err)
 	}
 
-	defer disk.Close() //nolint:errcheck
-
-	diskTable, err := gpt.Open(disk)
-	if err != nil {
-		if errors.Is(err, gpt.ErrPartitionTableDoesNotExist) {
-			return false, nil
-		}
-
-		return false, fmt.Errorf("error creating GPT object: %w", err)
-	}
-
-	if err = diskTable.Read(); err != nil {
-		return false, err
-	}
-
-	return len(diskTable.Partitions().Items()) > 0, nil
+	return info.Name == "gpt" && len(info.Parts) > 0, nil
 }
 
 // launchVM runs qemu with args built based on config.
@@ -328,12 +319,21 @@ func launchVM(config *LaunchConfig) error {
 		"-no-reboot",
 		"-boot", fmt.Sprintf("order=%s,reboot-timeout=5000", bootOrder),
 		"-smbios", fmt.Sprintf("type=1,uuid=%s", config.NodeUUID),
+		"-smbios", "type=11,value=io.systemd.stub.kernel-cmdline-extra=console=ttyS0",
 		"-chardev", fmt.Sprintf("socket,path=%s/%s.sock,server=on,wait=off,id=qga0", config.StatePath, config.Hostname),
 		"-device", "virtio-serial",
 		"-device", "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0",
 		"-device", "i6300esb,id=watchdog0",
 		"-watchdog-action",
 		"pause",
+	}
+
+	if config.WithDebugShell {
+		args = append(
+			args,
+			"-serial",
+			fmt.Sprintf("unix:%s/%s.serial,server,nowait", config.StatePath, config.Hostname),
+		)
 	}
 
 	var (
@@ -343,10 +343,14 @@ func launchVM(config *LaunchConfig) error {
 
 	for i, disk := range config.DiskPaths {
 		driver := config.DiskDrivers[i]
+		blockSize := config.DiskBlockSizes[i]
 
 		switch driver {
 		case "virtio":
-			args = append(args, "-drive", fmt.Sprintf("format=raw,if=virtio,file=%s,cache=none,", disk))
+			args = append(args,
+				"-drive", fmt.Sprintf("id=virtio%d,format=raw,if=none,file=%s,cache=none", i, disk),
+				"-device", fmt.Sprintf("virtio-blk-pci,drive=virtio%d,logical_block_size=%d,physical_block_size=%d", i, blockSize, blockSize),
+			)
 		case "ide":
 			args = append(args, "-drive", fmt.Sprintf("format=raw,if=ide,file=%s,cache=none,", disk))
 		case "ahci":
@@ -369,7 +373,7 @@ func launchVM(config *LaunchConfig) error {
 
 			args = append(args,
 				"-drive", fmt.Sprintf("id=scsi%d,format=raw,if=none,file=%s,discard=unmap,aio=native,cache=none", i, disk),
-				"-device", fmt.Sprintf("scsi-hd,drive=scsi%d,bus=scsi0.0", i),
+				"-device", fmt.Sprintf("scsi-hd,drive=scsi%d,bus=scsi0.0,logical_block_size=%d,physical_block_size=%d", i, blockSize, blockSize),
 			)
 		case "nvme":
 			if !nvmeAttached {
@@ -382,20 +386,14 @@ func launchVM(config *LaunchConfig) error {
 
 			args = append(args,
 				"-drive", fmt.Sprintf("id=nvme%d,format=raw,if=none,file=%s,discard=unmap,aio=native,cache=none", i, disk),
-				"-device", fmt.Sprintf("nvme-ns,drive=nvme%d", i),
+				"-device", fmt.Sprintf("nvme-ns,drive=nvme%d,logical_block_size=%d,physical_block_size=%d", i, blockSize, blockSize),
 			)
 		default:
 			return fmt.Errorf("unsupported disk driver %q", driver)
 		}
 	}
 
-	machineArg := config.MachineType
-
-	if config.EnableKVM {
-		machineArg += ",accel=kvm,smm=on"
-	}
-
-	args = append(args, "-machine", machineArg)
+	args = append(args, config.ArchitectureData.KVMArgs(config.EnableKVM, config.IOMMUEnabled)...)
 
 	pflashArgs := make([]string, 2*len(config.PFlashImages))
 	for i := range config.PFlashImages {
@@ -404,6 +402,13 @@ func launchVM(config *LaunchConfig) error {
 	}
 
 	args = append(args, pflashArgs...)
+
+	if config.ExtraISOPath != "" {
+		args = append(args,
+			"-drive",
+			fmt.Sprintf("id=cdrom1,file=%s,media=cdrom", config.ExtraISOPath),
+		)
+	}
 
 	// check if disk is empty/wiped
 	diskBootable, err := checkPartitions(config)
@@ -433,22 +438,44 @@ func launchVM(config *LaunchConfig) error {
 			return err
 		}
 
+		if err := waitForFileToExist(tpm2SocketPath, 5*time.Second); err != nil {
+			return err
+		}
+
 		args = append(args,
-			"-chardev",
-			fmt.Sprintf("socket,id=chrtpm,path=%s", tpm2SocketPath),
-			"-tpmdev",
-			"emulator,id=tpm0,chardev=chrtpm",
-			"-device",
-			"tpm-tis,tpmdev=tpm0",
+			config.ArchitectureData.TPMDeviceArgs(tpm2SocketPath)...,
+		)
+	}
+
+	// ref: https://wiki.qemu.org/Features/VT-d
+	if config.IOMMUEnabled {
+		args = append(args,
+			"-device", "intel-iommu,intremap=on,device-iotlb=on",
+			"-device", "ioh3420,id=pcie.1,chassis=1",
+			"-device", "virtio-net-pci,bus=pcie.1,netdev=net1,disable-legacy=on,disable-modern=off,iommu_platform=on,ats=on",
+			"-netdev", "tap,id=net1,vhostforce=on,script=no,downscript=no",
 		)
 	}
 
 	if !diskBootable || !config.BootloaderEnabled {
-		if config.ISOPath != "" {
+		switch {
+		case config.ISOPath != "":
 			args = append(args,
-				"-cdrom", config.ISOPath,
+				"-drive",
+				fmt.Sprintf("id=cdrom0,file=%s,media=cdrom", config.ISOPath),
 			)
-		} else if config.KernelImagePath != "" {
+		case config.USBPath != "":
+			args = append(args,
+				"-drive", fmt.Sprintf("if=none,id=stick,format=raw,read-only=on,file=%s", config.USBPath),
+				"-device", "nec-usb-xhci,id=xhci",
+				"-device", "usb-storage,bus=xhci.0,drive=stick,removable=on",
+			)
+		case config.UKIPath != "":
+			args = append(args,
+				"-kernel", config.UKIPath,
+				"-append", config.KernelArgs,
+			)
+		case config.KernelImagePath != "":
 			args = append(args,
 				"-kernel", config.KernelImagePath,
 				"-initrd", config.InitrdPath,
@@ -464,9 +491,9 @@ func launchVM(config *LaunchConfig) error {
 		)
 	}
 
-	fmt.Fprintf(os.Stderr, "starting %s with args:\n%s\n", config.QemuExecutable, strings.Join(args, " "))
+	fmt.Fprintf(os.Stderr, "starting %s with args:\n%s\n", config.ArchitectureData.QemuExecutable(), strings.Join(args, " "))
 	cmd := exec.Command(
-		config.QemuExecutable,
+		config.ArchitectureData.QemuExecutable(),
 		args...,
 	)
 
@@ -573,4 +600,22 @@ func Launch() error {
 			}
 		}
 	})
+}
+
+func waitForFileToExist(path string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			if _, err := os.Stat(path); err == nil {
+				return nil
+			}
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
 }

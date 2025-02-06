@@ -9,6 +9,7 @@ import (
 	"github.com/cosi-project/runtime/pkg/resource/meta"
 	"github.com/cosi-project/runtime/pkg/resource/protobuf"
 	"github.com/cosi-project/runtime/pkg/resource/typed"
+	"github.com/dustin/go-humanize"
 
 	"github.com/siderolabs/talos/pkg/machinery/proto"
 )
@@ -23,9 +24,12 @@ type Disk = typed.Resource[DiskSpec, DiskExtension]
 //
 //gotagsrewrite:gen
 type DiskSpec struct {
+	DevPath string `yaml:"dev_path" protobuf:"14"`
+
 	Size       uint64 `yaml:"size" protobuf:"1"`
-	IOSize     uint   `yaml:"ioSize" protobuf:"2"`
-	SectorSize uint   `yaml:"sectorSize" protobuf:"3"`
+	PrettySize string `yaml:"pretty_size" protobuf:"15"`
+	IOSize     uint   `yaml:"io_size" protobuf:"2"`
+	SectorSize uint   `yaml:"sector_size" protobuf:"3"`
 
 	Readonly bool `yaml:"readonly" protobuf:"4"`
 	CDROM    bool `yaml:"cdrom" protobuf:"13"`
@@ -34,10 +38,25 @@ type DiskSpec struct {
 	Serial     string `yaml:"serial,omitempty" protobuf:"6"`
 	Modalias   string `yaml:"modalias,omitempty" protobuf:"7"`
 	WWID       string `yaml:"wwid,omitempty" protobuf:"8"`
-	BusPath    string `yaml:"busPath,omitempty" protobuf:"9"`
-	SubSystem  string `yaml:"subSystem,omitempty" protobuf:"10"`
+	UUID       string `yaml:"uuid,omitempty" protobuf:"17"`
+	BusPath    string `yaml:"bus_path,omitempty" protobuf:"9"`
+	SubSystem  string `yaml:"sub_system,omitempty" protobuf:"10"`
 	Transport  string `yaml:"transport,omitempty" protobuf:"11"`
 	Rotational bool   `yaml:"rotational,omitempty" protobuf:"12"`
+
+	// SecondaryDisks (if set) specifies the secondary disk IDs.
+	//
+	// E.g. if the blockdevice secondary is vda5, the secondary disk will be set as vda.
+	// This allows to map secondaries between disks ignoring the partitions.
+	SecondaryDisks []string `yaml:"secondary_disks,omitempty" protobuf:"16"`
+
+	Symlinks []string `yaml:"symlinks,omitempty" protobuf:"18"`
+}
+
+// SetSize sets the size of the disk, including the pretty size.
+func (s *DiskSpec) SetSize(size uint64) {
+	s.Size = size
+	s.PrettySize = humanize.Bytes(size)
 }
 
 // NewDisk initializes a BlockDisk resource.
@@ -60,7 +79,7 @@ func (DiskExtension) ResourceDefinition() meta.ResourceDefinitionSpec {
 		PrintColumns: []meta.PrintColumn{
 			{
 				Name:     "Size",
-				JSONPath: `{.size}`,
+				JSONPath: `{.pretty_size}`,
 			},
 			{
 				Name:     "Read Only",

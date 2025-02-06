@@ -44,6 +44,13 @@ Important Notes:
 - Any disk devices you add to the cluster in the 'CephCluster' must be empty (no filesystem and no partitions).
 ```
 
+Default PodSecurity configuration prevents execution of priviledged pods.
+Adding a label to the namespace will allow ceph to start.
+
+```shell
+kubectl label namespace rook-ceph pod-security.kubernetes.io/enforce=privileged
+```
+
 Once that is complete, the Ceph cluster can be installed with the official Helm Chart.
 The Chart can be installed with default values, which will attempt to use all nodes in the Kubernetes cluster, and all unused disks on each node for Ceph storage, and make available block storage, object storage, as well as a shared filesystem.
 Generally more specific node/device/cluster configuration is used, and the [Rook documentation](https://rook.io/docs/rook/v1.8/ceph-cluster-crd.html) explains all the available options in detail.
@@ -96,7 +103,6 @@ ceph-filesystem        rook-ceph.cephfs.csi.ceph.com   Delete          Immediate
 ## Talos Linux Considerations
 
 It is important to note that a Rook Ceph cluster saves cluster information directly onto the node (by default `dataDirHostPath` is set to `/var/lib/rook`).
-If running only a single `mon` instance, cluster management is little bit more involved, as any time a Talos Linux node is reconfigured or upgraded, the partition that stores the `/var` [file system]({{< relref "../../learn-more/architecture#the-file-system" >}}) is wiped, but the `--preserve` option of [`talosctl upgrade`]({{< relref "../../reference/cli#talosctl-upgrade" >}}) will ensure that doesn't happen.
 
 By default, Rook configues Ceph to have 3 `mon` instances, in which case the data stored in `dataDirHostPath` can be regenerated from the other `mon` instances.
 So when performing maintenance on a Talos Linux node with a Rook Ceph cluster (e.g. upgrading the Talos Linux version), it is imperative that care be taken to maintain the health of the Ceph cluster.
@@ -276,6 +282,6 @@ pod/disk-wipe created
 $ kubectl wait --timeout=900s --for=jsonpath='{.status.phase}=Succeeded' pod disk-wipe
 pod/disk-wipe condition met
 
-$ kubectl delete pod disk-clean
+$ kubectl delete pod disk-wipe
 pod "disk-wipe" deleted
 ```

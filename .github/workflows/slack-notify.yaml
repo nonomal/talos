@@ -1,6 +1,6 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED, PLEASE DO NOT EDIT.
 #
-# Generated on 2024-06-11T15:17:44Z by kres 7360563.
+# Generated on 2025-01-15T19:56:36Z by kres 3b3f992.
 
 name: slack-notify
 "on":
@@ -22,16 +22,17 @@ name: slack-notify
       - integration-cilium-cron
       - integration-qemu-encrypted-vip-cron
       - integration-qemu-race-cron
-      - integration-qemu-csi-cron
+      - integration-qemu-csi-rook-ceph-cron
+      - integration-qemu-csi-longhorn-cron
+      - integration-qemu-csi-openebs-cron
       - integration-images-cron
       - integration-reproducibility-test-cron
-      - integration-cloud-images-cron
       - integration-image-factory-cron
       - integration-aws-cron
       - integration-aws-nvidia-oss-cron
       - integration-aws-nvidia-nonfree-cron
       - integration-azure-cron
-      - integration-equinix-metal-cron
+      - integration-gcp-cron
     types:
       - completed
 jobs:
@@ -49,11 +50,12 @@ jobs:
         run: |
           echo pull_request_number=$(gh pr view -R ${{ github.repository }} ${{ github.event.workflow_run.head_repository.owner.login }}:${{ github.event.workflow_run.head_branch }} --json number --jq .number) >> $GITHUB_OUTPUT
       - name: Slack Notify
-        uses: slackapi/slack-github-action@v1
+        uses: slackapi/slack-github-action@v2
         with:
-          channel-id: proj-talos-maintainers
+          method: chat.postMessage
           payload: |
             {
+                "channel": "proj-talos-maintainers",
                 "attachments": [
                     {
                         "color": "${{ github.event.workflow_run.conclusion == 'success' && '#2EB886' || github.event.workflow_run.conclusion == 'failure' && '#A30002' || '#FFCC00' }}",
@@ -113,5 +115,4 @@ jobs:
                     }
                 ]
             }
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          token: ${{ secrets.SLACK_BOT_TOKEN }}

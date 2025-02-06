@@ -22,30 +22,28 @@ Visit the [Proxmox](https://www.proxmox.com/en/downloads) downloads page if nece
 
 ### Install talosctl
 
-You can download `talosctl` an MacOS and Linux via:
+You can download `talosctl` on MacOS and Linux via:
 
 ```bash
 brew install siderolabs/tap/talosctl
 ```
 
-For manually installation and other platform please see the [talosctl installation guide]({{< relref "../talosctl.md" >}}).
+For manual installation and other platforms please see the [talosctl installation guide]({{< relref "../talosctl.md" >}}).
 
 ### Download ISO Image
 
-In order to install Talos in Proxmox, you will need the ISO image from the Talos release page.
-You can download `metal-amd64.iso` via
-[github.com/siderolabs/talos/releases](https://github.com/siderolabs/talos/releases)
+In order to install Talos in Proxmox, you will need the ISO image from [Image Factory](https://www.talos.dev/latest/talos-guides/install/boot-assets/#image-factory)..
 
 ```bash
 mkdir -p _out/
-curl https://github.com/siderolabs/talos/releases/download/{{< release >}}/metal-<arch>.iso -L -o _out/metal-<arch>.iso
+curl https://factory.talos.dev/image/376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba/<version>/metal-<arch>.iso -L -o _out/metal-<arch>.iso
 ```
 
 For example version `{{< release >}}` for `linux` platform:
 
 ```bash
 mkdir -p _out/
-curl https://github.com/siderolabs/talos/releases/download/{{< release >}}/metal-amd64.iso -L -o _out/metal-amd64.iso
+curl https://factory.talos.dev/image/376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba/{{< release >}}/metal-amd64.iso -L -o _out/metal-amd64.iso
 ```
 
 ### QEMU guest agent support (iso)

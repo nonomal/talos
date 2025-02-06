@@ -142,7 +142,7 @@ https://github.com/piraeusdatastore/kubectl-linstor
 Or use [krew](https://krew.sigs.k8s.io/): `kubectl krew install linstor`
 
 ```sh
-# Create device pool on a blank (no partitation table!) disk on node01
+# Create device pool on a blank (no partition table!) disk on node01
 kubectl linstor physical-storage create-device-pool --pool-name nvme_lvm_pool LVM node01 /dev/nvme0n1 --storage-pool nvme_pool
 ```
 
@@ -197,4 +197,4 @@ suited to the task, especially when coupled with a read-only host operating
 system.
 
 iSCSI support in Talos is now supported via the [iscsi-tools](https://github.com/siderolabs/extensions/pkgs/container/iscsi-tools) [system extension]({{< relref "../../talos-guides/configuration/system-extensions" >}}) installed.
-The extension enables compatibility with OpenEBS Jiva - refer to the [local storage]({{< relref "replicated-local-storage-with-openebs-jiva.md" >}}) installation guide for more information.
+The extension enables compatibility with OpenEBS Jiva - refer to the [local storage]({{< relref "replicated-local-storage-with-openebs" >}}) installation guide for more information.

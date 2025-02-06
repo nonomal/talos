@@ -7,13 +7,16 @@ package imager
 import (
 	"context"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
+	randv2 "math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/freddierice/go-losetup/v2"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -22,6 +25,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/siderolabs/go-pointer"
 	"github.com/siderolabs/go-procfs/procfs"
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 
 	"github.com/siderolabs/talos/cmd/installer/pkg/install"
@@ -79,15 +83,31 @@ func (i *Imager) outCmdline(path string) error {
 	return os.WriteFile(path, []byte(i.cmdline), 0o644)
 }
 
-//nolint:gocyclo
+//nolint:gocyclo,cyclop
 func (i *Imager) outISO(ctx context.Context, path string, report *reporter.Reporter) error {
 	printf := progressPrintf(report, reporter.Update{Message: "building ISO...", Status: reporter.StatusRunning})
 
 	scratchSpace := filepath.Join(i.tempDir, "iso")
 
-	var err error
+	var (
+		err                error
+		zeroContainerAsset profile.ContainerAsset
+	)
 
-	if i.prof.SecureBootEnabled() {
+	if i.prof.Input.ImageCache != zeroContainerAsset {
+		if err := os.MkdirAll(filepath.Join(scratchSpace, "imagecache"), 0o755); err != nil {
+			return err
+		}
+
+		if err := i.prof.Input.ImageCache.Extract(ctx, filepath.Join(scratchSpace, "imagecache"), i.prof.Arch, printf); err != nil {
+			return err
+		}
+	}
+
+	var generator iso.Generator
+
+	switch {
+	case i.prof.SecureBootEnabled():
 		isoOptions := pointer.SafeDeref(i.prof.Output.ISOOptions)
 
 		var signer pesign.CertificateSigner
@@ -103,7 +123,7 @@ func (i *Imager) outISO(ctx context.Context, path string, report *reporter.Repor
 			return fmt.Errorf("failed to write uki.der: %w", err)
 		}
 
-		options := iso.UEFIOptions{
+		options := iso.Options{
 			UKIPath:    i.ukiPath,
 			SDBootPath: i.sdBootPath,
 
@@ -133,7 +153,7 @@ func (i *Imager) outISO(ctx context.Context, path string, report *reporter.Repor
 
 			var entries []database.Entry
 
-			entries, err = database.Generate(enrolledPEM, signer)
+			entries, err = database.Generate(enrolledPEM, signer, database.IncludeWellKnownCertificates(i.prof.Input.SecureBoot.IncludeWellKnownCerts))
 			if err != nil {
 				return fmt.Errorf("failed to generate database: %w", err)
 			}
@@ -162,20 +182,52 @@ func (i *Imager) outISO(ctx context.Context, path string, report *reporter.Repor
 			options.SignatureKeyPath = i.prof.Input.SecureBoot.SignatureKeyPath
 		}
 
-		err = iso.CreateUEFI(printf, options)
-	} else {
-		err = iso.CreateGRUB(printf, iso.GRUBOptions{
+		generator, err = options.CreateUEFI(printf)
+		if err != nil {
+			return err
+		}
+	case quirks.New(i.prof.Version).UseSDBootForUEFI():
+		options := iso.Options{
 			KernelPath:    i.prof.Input.Kernel.Path,
 			InitramfsPath: i.initramfsPath,
 			Cmdline:       i.cmdline,
-			Version:       i.prof.Version,
+
+			UKIPath:    i.ukiPath,
+			SDBootPath: i.sdBootPath,
+
+			SDBootSecureBootEnrollKeys: "off",
+
+			Arch:    i.prof.Arch,
+			Version: i.prof.Version,
 
 			ScratchDir: scratchSpace,
 			OutPath:    path,
-		})
+		}
+
+		generator, err = options.CreateHybrid(printf)
+		if err != nil {
+			return err
+		}
+	default:
+		options := iso.Options{
+			KernelPath:    i.prof.Input.Kernel.Path,
+			InitramfsPath: i.initramfsPath,
+			Cmdline:       i.cmdline,
+
+			Arch:    i.prof.Arch,
+			Version: i.prof.Version,
+
+			ScratchDir: scratchSpace,
+			OutPath:    path,
+		}
+
+		generator, err = options.CreateGRUB(printf)
+		if err != nil {
+			return err
+		}
 	}
 
-	if err != nil {
+	if err := generator.Generate(); err != nil {
 		return err
 	}
 
@@ -219,6 +271,7 @@ func (i *Imager) outImage(ctx context.Context, path string, report *reporter.Rep
 	return nil
 }
 
+//nolint:gocyclo
 func (i *Imager) buildImage(ctx context.Context, path string, printf func(string, ...any)) error {
 	if err := utils.CreateRawDisk(printf, path, i.prof.Output.ImageOptions.DiskSize); err != nil {
 		return err
@@ -227,18 +280,36 @@ func (i *Imager) buildImage(ctx context.Context, path string, printf func(string
 	printf("attaching loopback device")
 
 	var (
-		loDevice string
-		err      error
+		loDevice           losetup.Device
+		err                error
+		zeroContainerAsset profile.ContainerAsset
 	)
 
-	if loDevice, err = utils.Loattach(path); err != nil {
-		return err
+	for range 10 {
+		loDevice, err = losetup.Attach(path, 0, false)
+		if err != nil {
+			if errors.Is(err, unix.EBUSY) {
+				spraySleep := max(randv2.ExpFloat64(), 2.0)
+
+				printf("retrying after %v seconds", spraySleep)
+
+				time.Sleep(time.Duration(spraySleep * float64(time.Second)))
+
+				continue
+			}
+
+			return fmt.Errorf("failed to attach loopback device: %w", err)
+		}
+
+		printf("attached loopback device: %s", loDevice.Path())
+
+		break
 	}
 
 	defer func() {
-		printf("detaching loopback device")
+		printf("detaching loopback device %s", loDevice.Path())
 
-		if e := utils.Lodetach(loDevice); e != nil {
+		if e := loDevice.Detach(); e != nil {
 			log.Println(e)
 		}
 	}()
@@ -248,7 +319,7 @@ func (i *Imager) buildImage(ctx context.Context, path string, printf func(string
 	scratchSpace := filepath.Join(i.tempDir, "image")
 
 	opts := &install.Options{
-		Disk:       loDevice,
+		Disk:       loDevice.Path(),
 		Platform:   i.prof.Platform,
 		Arch:       i.prof.Arch,
 		Board:      i.prof.Board,
@@ -277,6 +348,20 @@ func (i *Imager) buildImage(ctx context.Context, path string, printf func(string
 
 	if opts.Board == "" {
 		opts.Board = constants.BoardNone
+	}
+
+	if i.prof.Input.ImageCache != zeroContainerAsset {
+		imageCacheDir := filepath.Join(i.tempDir, "imagecache")
+
+		if err := os.MkdirAll(imageCacheDir, 0o755); err != nil {
+			return err
+		}
+
+		if err := i.prof.Input.ImageCache.Extract(ctx, imageCacheDir, i.prof.Arch, printf); err != nil {
+			return err
+		}
+
+		opts.ImageCachePath = imageCacheDir
 	}
 
 	installer, err := install.NewInstaller(ctx, cmdline, install.ModeImage, opts)
@@ -343,15 +428,23 @@ func (i *Imager) outInstaller(ctx context.Context, path string, report *reporter
 
 	printf("generating artifacts layer")
 
-	if i.prof.SecureBootEnabled() {
+	ukiPath := strings.TrimLeft(fmt.Sprintf(constants.UKIAssetPath, i.prof.Arch), "/")
+
+	quirks := quirks.New(i.prof.Version)
+
+	if i.prof.SecureBootEnabled() && !quirks.UseSDBootForUEFI() {
+		ukiPath += ".signed" // support for older secureboot installers
+	}
+
+	if quirks.UseSDBootForUEFI() || i.prof.SecureBootEnabled() {
 		artifacts = append(artifacts,
-			filemap.File{
-				ImagePath:  strings.TrimLeft(fmt.Sprintf(constants.UKIAssetPath, i.prof.Arch), "/"),
-				SourcePath: i.ukiPath,
-			},
 			filemap.File{
 				ImagePath:  strings.TrimLeft(fmt.Sprintf(constants.SDBootAssetPath, i.prof.Arch), "/"),
 				SourcePath: i.sdBootPath,
+			},
+			filemap.File{
+				ImagePath:  ukiPath,
+				SourcePath: i.ukiPath,
 			},
 		)
 	} else {
@@ -367,7 +460,7 @@ func (i *Imager) outInstaller(ctx context.Context, path string, report *reporter
 		)
 	}
 
-	if !quirks.New(i.prof.Version).SupportsOverlay() {
+	if !quirks.SupportsOverlay() {
 		for _, extraArtifact := range []struct {
 			sourcePath string
 			imagePath  string
@@ -442,7 +535,6 @@ func (i *Imager) outInstaller(ctx context.Context, path string, report *reporter
 		for _, extraArtifact := range []struct {
 			sourcePath string
 			imagePath  string
-			mode       os.FileMode
 		}{
 			{
 				sourcePath: filepath.Join(i.tempDir, "overlay-installer", constants.ImagerOverlayArtifactsPath),
@@ -451,7 +543,6 @@ func (i *Imager) outInstaller(ctx context.Context, path string, report *reporter
 			{
 				sourcePath: filepath.Join(i.tempDir, "overlay-installer", constants.ImagerOverlayInstallersPath, i.prof.Overlay.Name),
 				imagePath:  strings.TrimLeft(constants.ImagerOverlayInstallerDefaultPath, "/"),
-				mode:       0o755,
 			},
 			{
 				sourcePath: filepath.Join(i.tempDir, constants.ImagerOverlayExtraOptionsPath),
@@ -463,10 +554,6 @@ func (i *Imager) outInstaller(ctx context.Context, path string, report *reporter
 			extraFiles, err = filemap.Walk(extraArtifact.sourcePath, extraArtifact.imagePath)
 			if err != nil {
 				return fmt.Errorf("failed to walk extra artifact %s: %w", extraArtifact.sourcePath, err)
-			}
-
-			for i := range extraFiles {
-				extraFiles[i].ImageMode = int64(extraArtifact.mode)
 			}
 
 			overlayArtifacts = append(overlayArtifacts, extraFiles...)

@@ -3,6 +3,7 @@ syntax = "proto3";
 package talos.resource.definitions.kubespan;
 
 option go_package = "github.com/siderolabs/talos/pkg/machinery/api/resource/definitions/kubespan";
+option java_package = "dev.talos.api.resource.definitions.kubespan";
 
 import "common/common.proto";
 import "google/protobuf/timestamp.proto";
@@ -18,6 +19,7 @@ message ConfigSpec {
   uint32 mtu = 6;
   repeated string endpoint_filters = 7;
   bool harvest_extra_endpoints = 8;
+  repeated common.NetIPPort extra_endpoints = 9;
 }
 
 // EndpointSpec describes Endpoint state.

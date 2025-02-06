@@ -7,20 +7,23 @@ package v1alpha1
 import (
 	"crypto/tls"
 	stdx509 "crypto/x509"
-	"errors"
 	"fmt"
 	"os"
 	"slices"
 	"strings"
 	"time"
 
-	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/google/cel-go/common/ast"
+	"github.com/google/cel-go/common/operators"
+	"github.com/google/cel-go/common/types"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/siderolabs/crypto/x509"
 	"github.com/siderolabs/gen/xslices"
-	"github.com/siderolabs/go-blockdevice/blockdevice/encryption"
-	"github.com/siderolabs/go-blockdevice/blockdevice/util/disk"
+	"github.com/siderolabs/go-blockdevice/v2/encryption"
 	"github.com/siderolabs/go-pointer"
 
+	"github.com/siderolabs/talos/pkg/machinery/cel"
+	"github.com/siderolabs/talos/pkg/machinery/cel/celenv"
 	"github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
@@ -91,9 +94,19 @@ func (m *MachineConfig) NodeLabels() config.NodeLabels {
 	return m.MachineNodeLabels
 }
 
+// NodeAnnotations implements the config.Provider interface.
+func (m *MachineConfig) NodeAnnotations() config.NodeAnnotations {
+	return m.MachineNodeAnnotations
+}
+
 // NodeTaints implements the config.Provider interface.
 func (m *MachineConfig) NodeTaints() config.NodeTaints {
 	return m.MachineNodeTaints
+}
+
+// BaseRuntimeSpecOverrides implements the config.Provider interface.
+func (m *MachineConfig) BaseRuntimeSpecOverrides() map[string]any {
+	return m.MachineBaseRuntimeSpecOverrides.Object
 }
 
 // Cluster implements the config.Provider interface.
@@ -595,6 +608,11 @@ func (n *NetworkConfig) Resolvers() []string {
 	return n.NameServers
 }
 
+// SearchDomains implements the config.Provider interface.
+func (n *NetworkConfig) SearchDomains() []string {
+	return n.Searches
+}
+
 // ExtraHosts implements the config.Provider interface.
 func (n *NetworkConfig) ExtraHosts() []config.ExtraHost {
 	return xslices.Map(n.ExtraHostEntries, func(e *ExtraHost) config.ExtraHost { return e })
@@ -657,6 +675,15 @@ func (d *Device) Bridge() config.Bridge {
 	}
 
 	return d.DeviceBridge
+}
+
+// BridgePort implements the MachineNetwork interface.
+func (d *Device) BridgePort() config.BridgePort {
+	if d.DeviceBridgePort == nil {
+		return nil
+	}
+
+	return d.DeviceBridgePort
 }
 
 // Vlans implements the MachineNetwork interface.
@@ -832,6 +859,11 @@ func (s *NetworkDeviceSelector) Bus() string {
 // HardwareAddress implements config.NetworkDeviceSelector interface.
 func (s *NetworkDeviceSelector) HardwareAddress() string {
 	return s.NetworkDeviceHardwareAddress
+}
+
+// PermanentAddress implements config.NetworkDeviceSelector interface.
+func (s *NetworkDeviceSelector) PermanentAddress() string {
+	return s.NetworkDevicePermanentAddress
 }
 
 // PCIID implements config.NetworkDeviceSelector interface.
@@ -1071,6 +1103,15 @@ func (b *Bridge) VLAN() config.BridgeVLAN {
 	return b.BridgeVLAN
 }
 
+// Master implements the config.BridgePort interface.
+func (b *BridgePort) Master() string {
+	if b == nil {
+		return ""
+	}
+
+	return b.BridgePortMaster
+}
+
 // Addresses implements the MachineNetwork interface.
 func (v *Vlan) Addresses() []string {
 	switch {
@@ -1194,72 +1235,177 @@ func (i *InstallConfig) Extensions() []config.Extension {
 }
 
 // Disk implements the config.Provider interface.
-func (i *InstallConfig) Disk() (string, error) {
-	matchers := i.DiskMatchers()
-	if len(matchers) > 0 {
-		d, err := disk.Find(matchers...)
-		if err != nil {
-			return "", err
-		}
-
-		if d != nil {
-			return d.DeviceName, nil
-		}
-
-		return "", errors.New("no disk found matching provided parameters")
-	}
-
-	return i.InstallDisk, nil
+func (i *InstallConfig) Disk() string {
+	return i.InstallDisk
 }
 
-// DiskMatchers implements the config.Provider interface.
+// DiskMatchExpression returns the disk matcher expression by inspecting the InstallDiskSelector.
 //
 //nolint:gocyclo
-func (i *InstallConfig) DiskMatchers() []disk.Matcher {
-	if i.InstallDiskSelector != nil {
-		selector := i.InstallDiskSelector
-
-		var matchers []disk.Matcher
-		if selector.Size != nil {
-			matchers = append(matchers, selector.Size.Matcher)
-		}
-
-		if selector.UUID != "" {
-			matchers = append(matchers, disk.WithUUID(selector.UUID))
-		}
-
-		if selector.WWID != "" {
-			matchers = append(matchers, disk.WithWWID(selector.WWID))
-		}
-
-		if selector.Model != "" {
-			matchers = append(matchers, disk.WithModel(selector.Model))
-		}
-
-		if selector.Name != "" {
-			matchers = append(matchers, disk.WithName(selector.Name))
-		}
-
-		if selector.Serial != "" {
-			matchers = append(matchers, disk.WithSerial(selector.Serial))
-		}
-
-		if selector.Modalias != "" {
-			matchers = append(matchers, disk.WithModalias(selector.Modalias))
-		}
-
-		if disk.Type(selector.Type) != disk.TypeUnknown {
-			matchers = append(matchers, disk.WithType(disk.Type(selector.Type)))
-		}
-
-		if selector.BusPath != "" {
-			matchers = append(matchers, disk.WithBusPath(selector.BusPath))
-		}
-
-		return matchers
+func (i *InstallConfig) DiskMatchExpression() (*cel.Expression, error) {
+	if i.InstallDiskSelector == nil {
+		return nil, nil
 	}
 
-	return nil
+	var exprs []ast.Expr
+
+	builder := cel.NewBuilder(celenv.DiskLocator())
+	selector := i.InstallDiskSelector
+
+	if selector.Size != nil {
+		op := selector.Size.MatchData.Op
+		if op == "" {
+			op = "=="
+		}
+
+		exprs = append(exprs, // disk.size op value
+			builder.NewCall(
+				builder.NextID(),
+				"_"+op+"_",
+				builder.NewSelect(
+					builder.NextID(),
+					builder.NewIdent(builder.NextID(), "disk"),
+					"size",
+				),
+				builder.NewLiteral(
+					builder.NextID(),
+					types.Uint(selector.Size.MatchData.Size),
+				),
+			),
+		)
+	}
+
+	patternMatcherExpr := func(pattern, field string) ast.Expr { // glob(pattern, disk.$field)
+		return builder.NewCall(
+			builder.NextID(),
+			"glob",
+			builder.NewLiteral(builder.NextID(), types.String(pattern)),
+			builder.NewSelect(
+				builder.NextID(),
+				builder.NewIdent(builder.NextID(), "disk"),
+				field,
+			),
+		)
+	}
+
+	directMatchExpr := func(value, field string) ast.Expr { // disk.$field == value
+		return builder.NewCall(
+			builder.NextID(),
+			operators.Equals,
+			builder.NewSelect(
+				builder.NextID(),
+				builder.NewIdent(builder.NextID(), "disk"),
+				field,
+			),
+			builder.NewLiteral(builder.NextID(), types.String(value)),
+		)
+	}
+
+	if selector.UUID != "" {
+		exprs = append(exprs, patternMatcherExpr(selector.UUID, "uuid"))
+	}
+
+	if selector.WWID != "" {
+		exprs = append(exprs, patternMatcherExpr(selector.WWID, "wwid"))
+	}
+
+	if selector.Model != "" {
+		exprs = append(exprs, patternMatcherExpr(selector.Model, "model"))
+	}
+
+	if selector.Name != "" {
+		// not supported
+		return nil, fmt.Errorf("selector on name is not supported")
+	}
+
+	if selector.Serial != "" {
+		exprs = append(exprs, patternMatcherExpr(selector.Serial, "serial"))
+	}
+
+	if selector.Modalias != "" {
+		exprs = append(exprs, patternMatcherExpr(selector.Modalias, "modalias"))
+	}
+
+	// disk.transport != "" (otherwise it might select e.g. DM devices)
+	exprs = append(exprs,
+		builder.NewCall(
+			builder.NextID(),
+			operators.NotEquals,
+			builder.NewSelect(
+				builder.NextID(),
+				builder.NewIdent(builder.NextID(), "disk"),
+				"transport",
+			),
+			builder.NewLiteral(builder.NextID(), types.String("")),
+		),
+	)
+
+	if selector.Type != "" {
+		switch selector.Type {
+		case "nvme": // disk.transport == "nvme"
+			exprs = append(exprs, directMatchExpr("nvme", "transport"))
+		case "sd": // disk.transport == "mmc"
+			exprs = append(exprs, directMatchExpr("mmc", "transport"))
+		case "hdd": // disk.rotational
+			exprs = append(exprs, builder.NewSelect(
+				builder.NextID(),
+				builder.NewIdent(builder.NextID(), "disk"),
+				"rotational",
+			))
+		case "ssd": // !disk.rotational
+			exprs = append(exprs,
+				builder.NewCall(
+					builder.NextID(),
+					operators.LogicalNot,
+					builder.NewSelect(
+						builder.NextID(),
+						builder.NewIdent(builder.NextID(), "disk"),
+						"rotational",
+					),
+				),
+			)
+		default:
+			return nil, fmt.Errorf("unsupported disk type %q", selector.Type)
+		}
+	}
+
+	if selector.BusPath != "" {
+		exprs = append(exprs, patternMatcherExpr(selector.BusPath, "bus_path"))
+	}
+
+	// exclude readonly disks: !disk.readonly
+	exprs = append(exprs, builder.NewCall(
+		builder.NextID(),
+		operators.LogicalNot,
+		builder.NewSelect(
+			builder.NextID(),
+			builder.NewIdent(builder.NextID(), "disk"),
+			"readonly",
+		),
+	))
+
+	// exclude CD-ROMs: !disk.cdrom
+	exprs = append(exprs, builder.NewCall(
+		builder.NextID(),
+		operators.LogicalNot,
+		builder.NewSelect(
+			builder.NextID(),
+			builder.NewIdent(builder.NextID(), "disk"),
+			"cdrom",
+		),
+	))
+
+	// reduce all expressions to a single one with &&
+	for len(exprs) > 1 {
+		exprs = append(exprs[:len(exprs)-2], builder.NewCall(
+			builder.NextID(),
+			operators.LogicalAnd,
+			exprs[len(exprs)-2],
+			exprs[len(exprs)-1],
+		))
+	}
+
+	return builder.ToBooleanExpression(exprs[0])
 }
 
 // ExtraKernelArgs implements the config.Provider interface.
@@ -1334,6 +1480,11 @@ func (r *RegistryMirrorConfig) Endpoints() []string {
 // OverridePath implements the Registries interface.
 func (r *RegistryMirrorConfig) OverridePath() bool {
 	return pointer.SafeDeref(r.MirrorOverridePath)
+}
+
+// SkipFallback implements the Registries interface.
+func (r *RegistryMirrorConfig) SkipFallback() bool {
+	return pointer.SafeDeref(r.MirrorSkipFallback)
 }
 
 // Content implements the config.Provider interface.

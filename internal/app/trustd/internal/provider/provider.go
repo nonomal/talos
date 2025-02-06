@@ -53,14 +53,14 @@ func NewTLSConfig(ctx context.Context, resources state.State) (*TLSConfig, error
 		switch event.Type {
 		case state.Created, state.Updated:
 			// expected
-		case state.Destroyed, state.Bootstrapped:
+		case state.Destroyed, state.Bootstrapped, state.Noop:
 			// ignore, we'll get another event
 			continue
 		case state.Errored:
 			return nil, fmt.Errorf("error watching for trustd certificates: %w", event.Error)
 		}
 
-		trustdCerts := event.Resource.(*secrets.Trustd) //nolint:errcheck,forcetypeassert
+		trustdCerts := event.Resource.(*secrets.Trustd) //nolint:forcetypeassert
 
 		if err := provider.Update(trustdCerts); err != nil {
 			return nil, err
@@ -87,14 +87,14 @@ func (tlsConfig *TLSConfig) Watch(ctx context.Context) error {
 		switch event.Type {
 		case state.Created, state.Updated:
 			// expected
-		case state.Destroyed, state.Bootstrapped:
+		case state.Destroyed, state.Bootstrapped, state.Noop:
 			// ignore, we'll get another event
 			continue
 		case state.Errored:
 			log.Printf("error watching for trustd certificates: %s", event.Error)
 		}
 
-		trustdCerts := event.Resource.(*secrets.Trustd) //nolint:errcheck,forcetypeassert
+		trustdCerts := event.Resource.(*secrets.Trustd) //nolint:forcetypeassert
 
 		if err := tlsConfig.certificateProvider.Update(trustdCerts); err != nil {
 			return fmt.Errorf("failed updating cert: %w", err)

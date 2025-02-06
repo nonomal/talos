@@ -79,6 +79,24 @@ func WithTPM2(enabled bool) Option {
 	}
 }
 
+// WithDebugShell drops into debug shell in initramfs.
+func WithDebugShell(enabled bool) Option {
+	return func(o *Options) error {
+		o.WithDebugShell = enabled
+
+		return nil
+	}
+}
+
+// WithIOMMU enables or disables IOMMU.
+func WithIOMMU(enabled bool) Option {
+	return func(o *Options) error {
+		o.IOMMUEnabled = enabled
+
+		return nil
+	}
+}
+
 // WithExtraUEFISearchPaths configures additional search paths to look for UEFI firmware.
 func WithExtraUEFISearchPaths(extraUEFISearchPaths []string) Option {
 	return func(o *Options) error {
@@ -124,10 +142,37 @@ func WithDeleteOnErr(v bool) Option {
 	}
 }
 
+// WithSaveSupportArchivePath specifies path to save support archive on destroy.
+func WithSaveSupportArchivePath(path string) Option {
+	return func(o *Options) error {
+		o.SaveSupportArchivePath = path
+
+		return nil
+	}
+}
+
+// WithSaveClusterLogsArchivePath specifies path to save cluster logs archive on destroy.
+func WithSaveClusterLogsArchivePath(path string) Option {
+	return func(o *Options) error {
+		o.SaveClusterLogsArchivePath = path
+
+		return nil
+	}
+}
+
 // WithKMS inits KMS server in the provisioner.
 func WithKMS(endpoint string) Option {
 	return func(o *Options) error {
 		o.KMSEndpoint = endpoint
+
+		return nil
+	}
+}
+
+// WithJSONLogs specifies endpoint to send logs in JSON format.
+func WithJSONLogs(endpoint string) Option {
+	return func(o *Options) error {
+		o.JSONLogsEndpoint = endpoint
 
 		return nil
 	}
@@ -157,15 +202,22 @@ type Options struct {
 	UEFIEnabled bool
 	// Enable TPM2 emulation using swtpm.
 	TPM2Enabled bool
+	// Enable debug shell in the bootloader.
+	WithDebugShell bool
+	// Enable IOMMU for VMs and add a new PCI root controller and network interface.
+	IOMMUEnabled bool
 	// Configure additional search paths to look for UEFI firmware.
 	ExtraUEFISearchPaths []string
 
 	// Expose ports to worker machines in docker provisioner
-	DockerPorts       []string
-	DockerPortsHostIP string
-	DeleteStateOnErr  bool
+	DockerPorts                []string
+	DockerPortsHostIP          string
+	SaveSupportArchivePath     string
+	SaveClusterLogsArchivePath string
+	DeleteStateOnErr           bool
 
-	KMSEndpoint string
+	KMSEndpoint      string
+	JSONLogsEndpoint string
 
 	SiderolinkEnabled bool
 }

@@ -13,16 +13,17 @@ import (
 // Node represents data gathered from a single node.
 type Node struct {
 	// These fields are directly API responses.
-	Hostname    *machine.Hostname
-	LoadAvg     *machine.LoadAvg
-	Version     *machine.Version
-	Memory      *machine.Memory
-	SystemStat  *machine.SystemStat
-	CPUsInfo    *machine.CPUsInfo
-	NetDevStats *machine.NetworkDeviceStats
-	DiskStats   *machine.DiskStats
-	Processes   *machine.Process
-	ServiceList *machine.ServiceList
+	Hostname      *machine.Hostname
+	LoadAvg       *machine.LoadAvg
+	Version       *machine.Version
+	Memory        *machine.Memory
+	SystemStat    *machine.SystemStat
+	CPUsFreqStats *machine.CPUsFreqStats
+	CPUsInfo      *machine.CPUsInfo
+	NetDevStats   *machine.NetworkDeviceStats
+	DiskStats     *machine.DiskStats
+	Processes     *machine.Process
+	ServiceList   *machine.ServiceList
 
 	// These fields are calculated as diff with Node data from previous pol.
 	SystemStatDiff  *machine.SystemStat
@@ -178,8 +179,8 @@ func (node *Node) UpdateDiff(old *Node) {
 		node.SystemStatDiff = &machine.SystemStat{
 			// TODO: support other fields
 			CpuTotal:        cpuInfoDiff(old.SystemStat.GetCpuTotal(), node.SystemStat.GetCpuTotal()),
-			ContextSwitches: node.SystemStat.ContextSwitches - old.SystemStat.ContextSwitches,
-			ProcessCreated:  node.SystemStat.ProcessCreated - old.SystemStat.ProcessCreated,
+			ContextSwitches: node.SystemStat.GetContextSwitches() - old.SystemStat.GetContextSwitches(),
+			ProcessCreated:  node.SystemStat.GetProcessCreated() - old.SystemStat.GetProcessCreated(),
 		}
 	}
 

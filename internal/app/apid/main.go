@@ -21,7 +21,7 @@ import (
 	"github.com/cosi-project/runtime/api/v1alpha1"
 	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/cosi-project/runtime/pkg/state/protobuf/client"
-	debug "github.com/siderolabs/go-debug"
+	"github.com/siderolabs/go-debug"
 	"github.com/siderolabs/grpc-proxy/proxy"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -31,6 +31,7 @@ import (
 	apidbackend "github.com/siderolabs/talos/internal/app/apid/pkg/backend"
 	"github.com/siderolabs/talos/internal/app/apid/pkg/director"
 	"github.com/siderolabs/talos/internal/app/apid/pkg/provider"
+	"github.com/siderolabs/talos/internal/pkg/selinux"
 	"github.com/siderolabs/talos/pkg/grpc/factory"
 	"github.com/siderolabs/talos/pkg/grpc/middleware/authz"
 	"github.com/siderolabs/talos/pkg/grpc/proxy/backend"
@@ -157,6 +158,10 @@ func apidMain() error {
 		return fmt.Errorf("error creating listner: %w", err)
 	}
 
+	if err = selinux.SetLabel(constants.APISocketPath, constants.APISocketLabel); err != nil {
+		return err
+	}
+
 	networkServer := func() *grpc.Server {
 		mode := authz.Disabled
 		if *rbacEnabled {
@@ -178,7 +183,7 @@ func apidMain() error {
 				grpc.Creds(
 					credentials.NewTLS(serverTLSConfig),
 				),
-				grpc.ForceServerCodec(proxy.Codec()),
+				grpc.ForceServerCodecV2(proxy.Codec()),
 				grpc.UnknownServiceHandler(
 					proxy.TransparentHandler(
 						router.Director,
@@ -205,7 +210,7 @@ func apidMain() error {
 			router,
 			factory.WithDefaultLog(),
 			factory.ServerOptions(
-				grpc.ForceServerCodec(proxy.Codec()),
+				grpc.ForceServerCodecV2(proxy.Codec()),
 				grpc.UnknownServiceHandler(
 					proxy.TransparentHandler(
 						router.Director,
@@ -248,7 +253,7 @@ func apidMain() error {
 	return errGroup.Wait()
 }
 
-func verifyExtKeyUsage(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+func verifyExtKeyUsage(_ [][]byte, verifiedChains [][]*x509.Certificate) error {
 	if len(verifiedChains) == 0 {
 		return errors.New("no verified chains")
 	}

@@ -39,7 +39,9 @@ The list of config changes allowed to be applied immediately in Talos {{< releas
 * `.machine.certCANs`
 * `.machine.install` (configuration is only applied during install/upgrade)
 * `.machine.network`
+* `.machine.nodeAnnotations`
 * `.machine.nodeLabels`
+* `.machine.nodeTaints`
 * `.machine.sysfs`
 * `.machine.sysctls`
 * `.machine.logging`
@@ -49,6 +51,8 @@ The list of config changes allowed to be applied immediately in Talos {{< releas
 * `.machine.kernel`
 * `.machine.registries` (CRI containerd plugin will not pick up the registry authentication settings without a reboot)
 * `.machine.features.kubernetesTalosAPIAccess`
+* `.machine.features.hostDNS`
+* `.machine.features.kubePrism`
 
 ### `talosctl apply-config`
 

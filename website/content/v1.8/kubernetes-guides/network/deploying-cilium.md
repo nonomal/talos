@@ -64,7 +64,7 @@ Install the [Cilium CLI](https://docs.cilium.io/en/v1.13/gettingstarted/k8s-inst
 ```bash
 cilium install \
     --set ipam.mode=kubernetes \
-    --set kubeProxyReplacement=disabled \
+    --set kubeProxyReplacement=false \
     --set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \
     --set securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}" \
     --set cgroup.autoMount.enabled=false \
@@ -111,14 +111,14 @@ helm install \
     --version 1.15.6 \
     --namespace kube-system \
     --set ipam.mode=kubernetes \
-    --set kubeProxyReplacement=disabled \
+    --set kubeProxyReplacement=false \
     --set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \
     --set securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}" \
     --set cgroup.autoMount.enabled=false \
     --set cgroup.hostRoot=/sys/fs/cgroup
 ```
 
-Or if you want to deploy Cilium without kube-proxy, also set some extra paramaters:
+Or if you want to deploy Cilium without kube-proxy, also set some extra parameters:
 
 ```bash
 helm install \
@@ -149,7 +149,7 @@ helm template \
     --version 1.15.6 \
     --namespace kube-system \
     --set ipam.mode=kubernetes \
-    --set kubeProxyReplacement=disabled \
+    --set kubeProxyReplacement=false \
     --set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \
     --set securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}" \
     --set cgroup.autoMount.enabled=false \
@@ -282,7 +282,8 @@ We can utilize a job pattern run arbitrary logic during bootstrap time.
 We can leverage this to our advantage to install Cilium by using an inline manifest as shown in the example below:
 
 ``` yaml
- inlineManifests:
+cluster:
+  inlineManifests:
     - name: cilium-install
       contents: |
         ---
@@ -359,14 +360,22 @@ We can leverage this to our advantage to install Cilium by using an inline manif
                 command:
                   - cilium
                   - install
-                  - --set ipam.mode=kubernetes
-                  - --set kubeProxyReplacement=true
-                  - --set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}"
-                  - --set securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}"
-                  - --set cgroup.autoMount.enabled=false
-                  - --set cgroup.hostRoot=/sys/fs/cgroup
-                  - --set k8sServiceHost=localhost
-                  - --set k8sServicePort=7445
+                  - --set
+                  - ipam.mode=kubernetes
+                  - --set
+                  - kubeProxyReplacement=true
+                  - --set
+                  - securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}"
+                  - --set
+                  - securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}"
+                  - --set
+                  - cgroup.autoMount.enabled=false
+                  - --set
+                  - cgroup.hostRoot=/sys/fs/cgroup
+                  - --set
+                  - k8sServiceHost=localhost
+                  - --set
+                  - k8sServicePort=7445
 ```
 
 Because there is no CNI present at installation time the kubernetes.default.svc cannot be used to install Cilium, to overcome this limitation we'll utilize the host network connection to connect back to itself with 'hostNetwork: true' in tandem with the environment variables KUBERNETES_SERVICE_PORT and KUBERNETES_SERVICE_HOST.
@@ -379,6 +388,11 @@ The above can be combined exchanged with for example Method 3 to host arbitrary 
 
 - There are some gotchas when using Talos and Cilium on the Google cloud platform when using internal load balancers.
 For more details: [GCP ILB support / support scope local routes to be configured](https://github.com/siderolabs/talos/issues/4109)
+
+- When using Talos `forwardKubeDNSToHost=true` option (which is enabled by default) in combination with cilium `bpf.masquerade=true`.
+There is a known issue that causes `CoreDNS` to not work correctly.
+As a workaround, configuring `forwardKubeDNSToHost=false` resolves the issue.
+For more details see [the discusssion here](https://github.com/siderolabs/talos/pull/9200)
 
 ## Other things to know
 

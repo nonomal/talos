@@ -3,6 +3,7 @@ syntax = "proto3";
 package talos.resource.definitions.k8s;
 
 option go_package = "github.com/siderolabs/talos/pkg/machinery/api/resource/definitions/k8s";
+option java_package = "dev.talos.api.resource.definitions.k8s";
 
 import "common/common.proto";
 import "google/protobuf/struct.proto";
@@ -40,6 +41,19 @@ message AuditPolicyConfigSpec {
   google.protobuf.Struct config = 1;
 }
 
+// AuthorizationAuthorizersSpec is a configuration of authorization authorizers.
+message AuthorizationAuthorizersSpec {
+  string type = 1;
+  string name = 2;
+  google.protobuf.Struct webhook = 3;
+}
+
+// AuthorizationConfigSpec is authorization configuration for kube-apiserver.
+message AuthorizationConfigSpec {
+  string image = 1;
+  repeated AuthorizationAuthorizersSpec config = 2;
+}
+
 // BootstrapManifestsConfigSpec is configuration for bootstrap manifests.
 message BootstrapManifestsConfigSpec {
   string server = 1;
@@ -54,13 +68,11 @@ message BootstrapManifestsConfigSpec {
   string dns_service_i_pv6 = 10;
   bool flannel_enabled = 11;
   string flannel_image = 12;
-  string flannel_cni_image = 13;
   bool pod_security_policy_enabled = 14;
   bool talos_api_service_enabled = 15;
   repeated string flannel_extra_args = 16;
   string flannel_kube_service_host = 17;
   string flannel_kube_service_port = 18;
-  string service_host_dns_address = 19;
 }
 
 // ConfigStatusSpec describes status of rendered secrets.
@@ -148,6 +160,7 @@ message KubeletConfigSpec {
   bool disable_manifests_directory = 11;
   bool enable_fs_quota_monitoring = 12;
   google.protobuf.Struct credential_provider_config = 13;
+  bool allow_scheduling_on_control_plane = 14;
 }
 
 // KubeletSpecSpec holds the source of kubelet configuration.
@@ -168,6 +181,12 @@ message ManifestSpec {
 // ManifestStatusSpec describes manifest application status.
 message ManifestStatusSpec {
   repeated string manifests_applied = 1;
+}
+
+// NodeAnnotationSpecSpec represents an annoation that's attached to a Talos node.
+message NodeAnnotationSpecSpec {
+  string key = 1;
+  string value = 2;
 }
 
 // NodeIPConfigSpec holds the Node IP specification.

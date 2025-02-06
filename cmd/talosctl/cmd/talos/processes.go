@@ -178,6 +178,7 @@ var cpu = func(p1, p2 *machineapi.ProcessInfo) bool {
 	return p1.CpuTime > p2.CpuTime
 }
 
+//nolint:gocyclo
 func processesOutput(ctx context.Context, c *client.Client) (output string, err error) {
 	var remotePeer peer.Peer
 
@@ -214,6 +215,15 @@ func processesOutput(ctx context.Context, c *client.Client) (output string, err 
 				args = p.Args
 			}
 
+			// filter out non-printable characters
+			args = strings.Map(func(r rune) rune {
+				if r < 32 || r > 126 {
+					return ' '
+				}
+
+				return r
+			}, args)
+
 			node := defaultNode
 
 			if msg.Metadata != nil {
@@ -227,9 +237,6 @@ func processesOutput(ctx context.Context, c *client.Client) (output string, err 
 	}
 
 	res := columnize.SimpleFormat(s)
-	if err != nil {
-		return res, err
-	}
 
 	return res, helpers.CheckErrors(resp.Messages...)
 }

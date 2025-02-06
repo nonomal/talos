@@ -144,7 +144,7 @@ func (c *Client) GetClusterName() string {
 }
 
 // New returns a new Client.
-func New(ctx context.Context, opts ...OptionFunc) (c *Client, err error) {
+func New(_ context.Context, opts ...OptionFunc) (c *Client, err error) {
 	c = new(Client)
 
 	c.options = new(Options)
@@ -997,6 +997,15 @@ func (c *Client) ImagePull(ctx context.Context, namespace common.ContainerdNames
 		},
 		callOptions...,
 	)
+
+	_, err = FilterMessages(resp, err)
+
+	return err
+}
+
+// BlockDeviceWipe wipes a block device which is not used as a volume.
+func (c *Client) BlockDeviceWipe(ctx context.Context, req *storageapi.BlockDeviceWipeRequest, callOptions ...grpc.CallOption) error {
+	resp, err := c.StorageClient.BlockDeviceWipe(ctx, req, callOptions...)
 
 	_, err = FilterMessages(resp, err)
 

@@ -10,12 +10,14 @@ import (
 	"slices"
 	"time"
 
+	mounttypes "github.com/docker/docker/api/types/mount"
 	"github.com/google/uuid"
 	"github.com/siderolabs/go-procfs/procfs"
 
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
+	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 )
 
 // ClusterRequest is the root object describing cluster to be provisioned.
@@ -32,6 +34,8 @@ type ClusterRequest struct {
 	KernelPath     string
 	InitramfsPath  string
 	ISOPath        string
+	USBPath        string
+	UKIPath        string
 	DiskImagePath  string
 	IPXEBootScript string
 
@@ -162,21 +166,39 @@ type Disk struct {
 	//
 	// Supported types: "virtio", "ide", "ahci", "scsi", "nvme".
 	Driver string
+	// Block size for the disk, defaults to 512 if not set.
+	BlockSize uint
 }
+
+// ConfigInjectionMethod describes how to inject configuration into the node.
+type ConfigInjectionMethod int
+
+const (
+	// ConfigInjectionMethodHTTP injects configuration via HTTP.
+	ConfigInjectionMethodHTTP ConfigInjectionMethod = iota
+	// ConfigInjectionMethodMetalISO injects configuration via Metal ISO.
+	ConfigInjectionMethodMetalISO
+)
 
 // NodeRequest describes a request for a node.
 type NodeRequest struct {
-	Name   string
-	IPs    []netip.Addr
-	Config config.Provider
-	Type   machine.Type
+	Name string
+	IPs  []netip.Addr
+	Type machine.Type
+
+	Quirks quirks.Quirks
+
+	Config                config.Provider
+	ConfigInjectionMethod ConfigInjectionMethod
 
 	// Share of CPUs, in 1e-9 fractions
 	NanoCPUs int64
 	// Memory limit in bytes
 	Memory int64
-	// Disks (volumes), if applicable
+	// Disks (volumes), if applicable (VM only)
 	Disks []*Disk
+	// Mounts (containers only)
+	Mounts []mounttypes.Mount
 	// Ports
 	Ports []string
 	// SkipInjectingConfig disables reading configuration from http server
@@ -212,6 +234,8 @@ type NodeRequest struct {
 type SiderolinkRequest struct {
 	WireguardEndpoint string
 	APIEndpoint       string
+	APICertificate    []byte
+	APIKey            []byte
 	SinkEndpoint      string
 	LogEndpoint       string
 	SiderolinkBind    []SiderolinkBind

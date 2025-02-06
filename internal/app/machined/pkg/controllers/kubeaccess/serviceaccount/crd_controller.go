@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -184,8 +183,8 @@ func NewCRDController(
 	if _, err = secrets.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: controller.handleSecret,
 		UpdateFunc: func(oldSec, newSec any) {
-			newSecret := newSec.(*corev1.Secret) //nolint:errcheck
-			oldSecret := oldSec.(*corev1.Secret) //nolint:errcheck
+			newSecret := newSec.(*corev1.Secret)
+			oldSecret := oldSec.(*corev1.Secret)
 
 			if newSecret.ResourceVersion == oldSecret.ResourceVersion {
 				return
@@ -584,8 +583,8 @@ func (t *CRDController) needsUpdate(secret *corev1.Secret, desiredRoles []string
 
 	actualRoles := certificate.Subject.Organization
 
-	sort.Strings(actualRoles)
-	sort.Strings(desiredRoles)
+	slices.Sort(actualRoles)
+	slices.Sort(desiredRoles)
 
 	if !slices.Equal(actualRoles, desiredRoles) {
 		t.logger.Debug("roles in certificate do not match desired roles",

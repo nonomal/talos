@@ -4,103 +4,109 @@ commit = "HEAD"
 project_name = "Talos"
 github_repo = "siderolabs/talos"
 match_deps = "^github.com/((talos-systems|siderolabs)/[a-zA-Z0-9-]+)$"
+ignore_deps = ["github.com/coredns/coredns"]
 
 # previous release
-previous = "v1.7.0"
+previous = "v1.9.0"
 
 pre_release = true
 
-preface = """\
+preface = """
 """
 
 [notes]
     [notes.updates]
         title = "Component Updates"
         description = """\
-Kubernetes: 1.31.0-beta0
-Linux: 6.6.36
-containerd: 2.0.0-rc.3
-runc: 1.2.0-rc.2
-etcd: 3.5.14
-Flannel: 0.25.3
-Flannel CNI plugin: 1.5.1
+* Linux: 6.12.11
+* CNI plugins: 1.6.2
+* runc: 1.2.4
+* containerd: 2.0.2
+* etcd: 3.5.18
+* Flannel: 0.26.4
 
-Talos is built with Go 1.22.5.
+Talos is built with Go 1.23.5.
 """
 
-    [notes.apparmor]
-        title = "Workload Apparmor Profile"
+    [notes.driver-rebind]
+        title = "Driver Rebind"
         description = """\
-Talos Linux can now apply the default AppArmor profiles to all workloads started via containerd, if the machine is installed with the AppArmor LSM enforced via the extraKernelArgs.
+Talos 1.10 now supports a new machine config document named `PCIDriverRebindConfig` that allows rebinding the driver of a PCI device to a different target driver.
+See the [documentation](https://www.talos.dev/v1.10/reference/configuration/hardware/pcidriverrebindconfig/) for more information.
+"""
+
+    [notes.cgroupsv1]
+        title = "cgroups v1"
+        description = """\
+Talos Linux no longer supports `cgroupsv1` when running in non-container mode.
+The kernel argument `talos.unified_cgroup_hierarchy` is now ignored.
+"""
+
+    [notes.auditd]
+        title = "auditd"
+        description = """\
+Kernel parameter `talos.auditd.disabled=1` can be used to disable Talos built-in `auditd` service.
+"""
+
+    [notes.kube-apiserver-authorization-config]
+        title = "kube-apiserver Authorization Config"
+        description = """\
+When using `.cluster.apiServer.authorizationConfig` the user provided order for the authorizers is honoured and `Node` and `RBAC` authorizers are always added to the end if not explicitly specified.
+
+Eg: If user provides only `Webhook` authorizer, the final order will be `Webhook`, `Node`, `RBAC`.
+
+To provide a specific order for `Node` or `RBAC` explicitly, user can provide the authorizer in the order they want.
 
 Eg:
 
 ```yaml
-machine:
-    install:
-        extraKernelArgs:
-            - security=apparmor
-```
-"""
-
-    [notes.zstd]
-        title = "ZSTD Compression"
-        description = """\
-Talos Linux now compresses kernel and initramfs using ZSTD.
-Linux arm64 kernel is now compressed (previously it was uncompressed).
-"""
-
-    [notes.forward-kube-dns-to-host]
-        title = "DNS Forwarding for CoreDNS pods"
-        description = """\
-Usage of the host DNS resolver as upstream for Kubernetes CoreDNS pods is now enabled by default. You can disable it
-with:
-
-```yaml
-machine:
-  features:
-    hostDNS:
-      enabled: true
-      forwardKubeDNSToHost: false
+cluster:
+  apiServer:
+    authorizationConfig:
+      - type: Node
+        name: Node
+      - type: Webhook
+        name: Webhook
+        webhook:
+          connectionInfo:
+            type: InClusterConfig
+        ...
+      - type: RBAC
+        name: rbac
 ```
 
-Please note that on running cluster you will have to kill CoreDNS pods for this change to apply.
+Usage of `authorization-mode` CLI argument will not support this form of customization.
 """
 
-    [notes.lspci]
-        title = "PCI Devices"
+    [notes.iscsi-initiator-iqn]
+        title = "iSCSI Initiator"
         description = """\
-A list of PCI devices can now be obtained via `PCIDevices` resource, e.g. `talosctl get pcidevices`.
+Talos now generates `/etc/iscsi/initiatorname.iscsi` file based on the node identity which is tied to the lifecycle of the node.
+If using `iscsi-tools` extension, starting with Talos 1.10 would have a more deterministic IQN for the initiator node.
+Make sure to update any iSCSI targets to use the new initiator IQN.
+
+The iqn can be read by `talosctl read /etc/iscsi/initiatorname.iscsi`
 """
 
-    [notes.diagnostics]
-        title = "Diagnostics"
+    [notes.nvme-nqn]
+        title = "NVMe NQN"
         description = """\
-Talos Linux now shows diagnostics information for common problems related to misconfiguration via `talosctl health` and Talos dashboard.
+Talos now generates `/etc/nvme/hostnqn` and `/etc/nvme/hostid` files based on the node identity which is tied to the lifecycle of the node.
+
+The NQN can be read by `talosctl read /etc/nvme/hostnqn`
 """
 
-    [notes.bridge]
-        title = "Bridge Interface"
+    [notes.iso]
+        title = "ISO"
         description = """\
-Talos Linux now support configuring 'vlan_filtering' for bridge interfaces.
+Talos starting with 1.10 will have ISO's that will use GRUB only for legacy BIOS and systemd-boot for modern UEFI systems.
 """
 
-    [notes.proxy]
-        title = "kube-proxy"
+    [notes.ethernet]
+        title = "Ethernet"
         description = """\
-Talos Linux configures kube-proxy >= v1.31.0 to use 'nftables' backend by default.
-"""
-
-    [notes.trusted-roots]
-        title = "Custom Trusted Roots"
-        description = """\
-Talos Linux now supports adding [custom trusted roots](https://www.talos.dev/v1.8/talos-guides/configuration/certificate-authorities/) (CA certificates) via `TrustedRootsConfig` configuration documents.
-"""
-
-    [notes.labels]
-        title = "Default Node Labels"
-        description = """\
-Talos Linux on config generation now adds a label `node.kubernetes.io/exclude-from-external-load-balancers` by default for the control plane nodes.
+Talos now provides `ethtool`-style Ethernet low-level configuration via `network/EthernetConfig` documents.
+Current status of the interface can be read by `talosctl get ethernetstatus`.
 """
 
 [make_deps]

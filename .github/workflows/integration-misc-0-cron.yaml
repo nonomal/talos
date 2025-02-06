@@ -1,6 +1,6 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED, PLEASE DO NOT EDIT.
 #
-# Generated on 2024-05-27T16:20:10Z by kres bcb280a.
+# Generated on 2025-01-22T14:28:18Z by kres 3075de9.
 
 name: integration-misc-0-cron
 concurrency:
@@ -62,6 +62,10 @@ jobs:
         if: github.event_name != 'schedule'
         run: |
           xargs -a _out/executable-artifacts -I {} chmod +x {}
+      - name: ci-temp-release-tag
+        if: github.event_name != 'schedule'
+        run: |
+          make ci-temp-release-tag
       - name: build
         if: github.event_name == 'schedule'
         env:
@@ -76,6 +80,7 @@ jobs:
           make talosctl-cni-bundle
       - name: e2e-firewall
         env:
+          GITHUB_STEP_NAME: ${{ github.job}}-e2e-firewall
           IMAGE_REGISTRY: registry.dev.siderolabs.io
           SHORT_INTEGRATION_TEST: "yes"
           WITH_FIREWALL: block
@@ -84,15 +89,27 @@ jobs:
       - name: e2e-canal-reset
         env:
           CUSTOM_CNI_URL: https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/canal.yaml
+          GITHUB_STEP_NAME: ${{ github.job}}-e2e-canal-reset
           IMAGE_REGISTRY: registry.dev.siderolabs.io
           INTEGRATION_TEST_RUN: TestIntegration/api.ResetSuite/TestResetWithSpec
         run: |
           sudo -E make e2e-qemu
       - name: e2e-controlplane-port
         env:
+          GITHUB_STEP_NAME: ${{ github.job}}-e2e-controlplane-port
           IMAGE_REGISTRY: registry.dev.siderolabs.io
           SHORT_INTEGRATION_TEST: "yes"
+          WITH_CONFIG_PATCH: '@hack/test/patches/ephemeral-min-max.yaml'
           WITH_CONTROL_PLANE_PORT: "443"
+        run: |
+          sudo -E make e2e-qemu
+      - name: e2e-uki-4k
+        env:
+          GITHUB_STEP_NAME: ${{ github.job}}-e2e-uki-4k
+          IMAGE_REGISTRY: registry.dev.siderolabs.io
+          SHORT_INTEGRATION_TEST: "yes"
+          WITH_4K_DISK: "true"
+          WITH_UKI_BOOT: "true"
         run: |
           sudo -E make e2e-qemu
       - name: save artifacts
@@ -101,6 +118,6 @@ jobs:
         with:
           name: talos-logs-integration-misc-0
           path: |-
-            ~/.talos/clusters/**/*.log
-            !~/.talos/clusters/**/swtpm.log
+            /tmp/logs-*.tar.gz
+            /tmp/support-*.zip
           retention-days: "5"

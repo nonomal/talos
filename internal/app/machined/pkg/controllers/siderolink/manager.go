@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	networkutils "github.com/siderolabs/talos/internal/app/machined/pkg/controllers/network/utils"
+	"github.com/siderolabs/talos/pkg/httpdefaults"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/config"
@@ -432,9 +433,7 @@ func (ctrl *ManagerController) cleanupLinkSpecs(ctx context.Context, r controlle
 		return err
 	}
 
-	for iter := list.Iterator(); iter.Next(); {
-		link := iter.Value()
-
+	for link := range list.All() {
 		if link.Metadata().Owner() != ctrl.Name() {
 			continue
 		}
@@ -460,9 +459,7 @@ func (ctrl *ManagerController) cleanupAddressSpecs(ctx context.Context, r contro
 		return err
 	}
 
-	for iter := list.Iterator(); iter.Next(); {
-		address := iter.Value()
-
+	for address := range list.All() {
 		if address.Metadata().Owner() != ctrl.Name() {
 			continue
 		}
@@ -487,7 +484,9 @@ func withTransportCredentials(insec bool) grpc.DialOption {
 	if insec {
 		transportCredentials = insecure.NewCredentials()
 	} else {
-		transportCredentials = credentials.NewTLS(&tls.Config{})
+		transportCredentials = credentials.NewTLS(&tls.Config{
+			RootCAs: httpdefaults.RootCAs(),
+		})
 	}
 
 	return grpc.WithTransportCredentials(transportCredentials)

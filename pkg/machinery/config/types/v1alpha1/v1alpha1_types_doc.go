@@ -250,11 +250,25 @@ func (MachineConfig) Doc() *encoder.Doc {
 				Comments:    [3]string{"" /* encoder.HeadComment */, "Configures the seccomp profiles for the machine." /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
 			{
+				Name:        "baseRuntimeSpecOverrides",
+				Type:        "Unstructured",
+				Note:        "",
+				Description: "Override (patch) settings in the default OCI runtime spec for CRI containers.\n\nIt can be used to set some default container settings which are not configurable in Kubernetes,\nfor example default ulimits.\nNote: this change applies to all newly created containers, and it requires a reboot to take effect.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Override (patch) settings in the default OCI runtime spec for CRI containers." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+			{
 				Name:        "nodeLabels",
 				Type:        "map[string]string",
 				Note:        "",
 				Description: "Configures the node labels for the machine.\n\nNote: In the default Kubernetes configuration, worker nodes are restricted to set\nlabels with some prefixes (see [NodeRestriction](https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#noderestriction) admission plugin).",
 				Comments:    [3]string{"" /* encoder.HeadComment */, "Configures the node labels for the machine." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+			{
+				Name:        "nodeAnnotations",
+				Type:        "map[string]string",
+				Note:        "",
+				Description: "Configures the node annotations for the machine.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Configures the node annotations for the machine." /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
 			{
 				Name:        "nodeTaints",
@@ -291,8 +305,10 @@ func (MachineConfig) Doc() *encoder.Doc {
 	doc.Fields[20].AddExample("", machineLoggingExample())
 	doc.Fields[21].AddExample("", machineKernelExample())
 	doc.Fields[22].AddExample("", machineSeccompExample())
-	doc.Fields[23].AddExample("node labels example.", map[string]string{"exampleLabel": "exampleLabelValue"})
-	doc.Fields[24].AddExample("node taints example.", map[string]string{"exampleTaint": "exampleTaintValue:NoSchedule"})
+	doc.Fields[23].AddExample("override default open file limit", machineBaseRuntimeSpecOverridesExample())
+	doc.Fields[24].AddExample("node labels example.", map[string]string{"exampleLabel": "exampleLabelValue"})
+	doc.Fields[25].AddExample("node annotations example.", map[string]string{"customer.io/rack": "r13a25"})
+	doc.Fields[26].AddExample("node taints example.", map[string]string{"exampleTaint": "exampleTaintValue:NoSchedule"})
 
 	return doc
 }
@@ -942,6 +958,13 @@ func (NetworkConfig) Doc() *encoder.Doc {
 				Comments:    [3]string{"" /* encoder.HeadComment */, "Used to statically set the nameservers for the machine." /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
 			{
+				Name:        "searchDomains",
+				Type:        "[]string",
+				Note:        "",
+				Description: "Used to statically set arbitrary search domains.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Used to statically set arbitrary search domains." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+			{
 				Name:        "extraHostEntries",
 				Type:        "[]ExtraHost",
 				Note:        "",
@@ -975,8 +998,9 @@ func (NetworkConfig) Doc() *encoder.Doc {
 
 	doc.Fields[1].AddExample("", machineNetworkConfigExample().NetworkInterfaces)
 	doc.Fields[2].AddExample("", []string{"8.8.8.8", "1.1.1.1"})
-	doc.Fields[3].AddExample("", networkConfigExtraHostsExample())
-	doc.Fields[4].AddExample("", networkKubeSpanExample())
+	doc.Fields[3].AddExample("", []string{"example.org", "example.com"})
+	doc.Fields[4].AddExample("", networkConfigExtraHostsExample())
+	doc.Fields[5].AddExample("", networkKubeSpanExample())
 
 	return doc
 }
@@ -1441,6 +1465,13 @@ func (APIServerConfig) Doc() *encoder.Doc {
 				Description: "Configure the API server resources.",
 				Comments:    [3]string{"" /* encoder.HeadComment */, "Configure the API server resources." /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
+			{
+				Name:        "authorizationConfig",
+				Type:        "[]AuthorizationConfigAuthorizerConfig",
+				Note:        "",
+				Description: "Configure the API server authorization config. Node and RBAC authorizers are always added irrespective of the configuration.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Configure the API server authorization config. Node and RBAC authorizers are always added irrespective of the configuration." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
 		},
 	}
 
@@ -1449,6 +1480,7 @@ func (APIServerConfig) Doc() *encoder.Doc {
 	doc.Fields[0].AddExample("", clusterAPIServerImageExample())
 	doc.Fields[6].AddExample("", admissionControlConfigExample())
 	doc.Fields[7].AddExample("", APIServerDefaultAuditPolicy)
+	doc.Fields[9].AddExample("", authorizationConfigExample())
 
 	return doc
 }
@@ -1483,6 +1515,47 @@ func (AdmissionPluginConfig) Doc() *encoder.Doc {
 	}
 
 	doc.AddExample("", admissionControlConfigExample())
+
+	return doc
+}
+
+func (AuthorizationConfigAuthorizerConfig) Doc() *encoder.Doc {
+	doc := &encoder.Doc{
+		Type:        "AuthorizationConfigAuthorizerConfig",
+		Comments:    [3]string{"" /* encoder.HeadComment */, "AuthorizationConfigAuthorizerConfig represents the API server authorization config authorizer configuration." /* encoder.LineComment */, "" /* encoder.FootComment */},
+		Description: "AuthorizationConfigAuthorizerConfig represents the API server authorization config authorizer configuration.",
+		AppearsIn: []encoder.Appearance{
+			{
+				TypeName:  "APIServerConfig",
+				FieldName: "authorizationConfig",
+			},
+		},
+		Fields: []encoder.Doc{
+			{
+				Name:        "type",
+				Type:        "string",
+				Note:        "",
+				Description: "Type is the name of the authorizer. Allowed values are `Node`, `RBAC`, and `Webhook`.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Type is the name of the authorizer. Allowed values are `Node`, `RBAC`, and `Webhook`." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+			{
+				Name:        "name",
+				Type:        "string",
+				Note:        "",
+				Description: "Name is used to describe the authorizer.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Name is used to describe the authorizer." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+			{
+				Name:        "webhook",
+				Type:        "Unstructured",
+				Note:        "",
+				Description: "webhook is the configuration for the webhook authorizer.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "webhook is the configuration for the webhook authorizer." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+		},
+	}
+
+	doc.AddExample("", authorizationConfigExample())
 
 	return doc
 }
@@ -2400,6 +2473,13 @@ func (Device) Doc() *encoder.Doc {
 				Comments:    [3]string{"" /* encoder.HeadComment */, "Bridge specific options." /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
 			{
+				Name:        "bridgePort",
+				Type:        "BridgePort",
+				Note:        "",
+				Description: "Configure this device as a bridge port.\nThis can be used to dynamically assign network interfaces to a bridge.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Configure this device as a bridge port." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+			{
 				Name:        "vlans",
 				Type:        "[]Vlan",
 				Note:        "",
@@ -2467,11 +2547,12 @@ func (Device) Doc() *encoder.Doc {
 	doc.Fields[4].AddExample("", networkConfigRoutesExample())
 	doc.Fields[5].AddExample("", networkConfigBondExample())
 	doc.Fields[6].AddExample("", networkConfigBridgeExample())
-	doc.Fields[9].AddExample("", true)
-	doc.Fields[12].AddExample("", networkConfigDHCPOptionsExample())
-	doc.Fields[13].AddExample("wireguard server example", networkConfigWireguardHostExample())
-	doc.Fields[13].AddExample("wireguard peer example", networkConfigWireguardPeerExample())
-	doc.Fields[14].AddExample("layer2 vip example", networkConfigVIPLayer2Example())
+	doc.Fields[7].AddExample("", networkConfigDynamicBridgePortsExample())
+	doc.Fields[10].AddExample("", true)
+	doc.Fields[13].AddExample("", networkConfigDHCPOptionsExample())
+	doc.Fields[14].AddExample("wireguard server example", networkConfigWireguardHostExample())
+	doc.Fields[14].AddExample("wireguard peer example", networkConfigWireguardPeerExample())
+	doc.Fields[15].AddExample("layer2 vip example", networkConfigVIPLayer2Example())
 
 	return doc
 }
@@ -3010,20 +3091,47 @@ func (Bridge) Doc() *encoder.Doc {
 				Name:        "stp",
 				Type:        "STP",
 				Note:        "",
-				Description: "A bridge option.\nPlease see the official kernel documentation.",
-				Comments:    [3]string{"" /* encoder.HeadComment */, "A bridge option." /* encoder.LineComment */, "" /* encoder.FootComment */},
+				Description: "Enable STP on this bridge.\nPlease see the official kernel documentation.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Enable STP on this bridge." /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
 			{
 				Name:        "vlan",
 				Type:        "BridgeVLAN",
 				Note:        "",
-				Description: "A bridge option.\nPlease see the official kernel documentation.",
-				Comments:    [3]string{"" /* encoder.HeadComment */, "A bridge option." /* encoder.LineComment */, "" /* encoder.FootComment */},
+				Description: "Enable VLAN-awareness on this bridge.\nPlease see the official kernel documentation.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Enable VLAN-awareness on this bridge." /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
 		},
 	}
 
 	doc.AddExample("", networkConfigBridgeExample())
+
+	return doc
+}
+
+func (BridgePort) Doc() *encoder.Doc {
+	doc := &encoder.Doc{
+		Type:        "BridgePort",
+		Comments:    [3]string{"" /* encoder.HeadComment */, "BridgePort contains settings for assigning a link to a bridge interface." /* encoder.LineComment */, "" /* encoder.FootComment */},
+		Description: "BridgePort contains settings for assigning a link to a bridge interface.",
+		AppearsIn: []encoder.Appearance{
+			{
+				TypeName:  "Device",
+				FieldName: "bridgePort",
+			},
+		},
+		Fields: []encoder.Doc{
+			{
+				Name:        "master",
+				Type:        "string",
+				Note:        "",
+				Description: "The name of the bridge master interface",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "The name of the bridge master interface" /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+		},
+	}
+
+	doc.AddExample("", networkConfigDynamicBridgePortsExample())
 
 	return doc
 }
@@ -3180,6 +3288,13 @@ func (RegistryMirrorConfig) Doc() *encoder.Doc {
 				Note:        "",
 				Description: "Use the exact path specified for the endpoint (don't append /v2/).\nThis setting is often required for setting up multiple mirrors\non a single instance of a registry.",
 				Comments:    [3]string{"" /* encoder.HeadComment */, "Use the exact path specified for the endpoint (don't append /v2/)." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+			{
+				Name:        "skipFallback",
+				Type:        "bool",
+				Note:        "",
+				Description: "Skip fallback to the upstream endpoint, for example the mirror configuration\nfor `docker.io` will not fallback to `registry-1.docker.io`.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Skip fallback to the upstream endpoint, for example the mirror configuration" /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
 		},
 	}
@@ -3415,6 +3530,20 @@ func (FeaturesConfig) Doc() *encoder.Doc {
 				Description: "Configures host DNS caching resolver.",
 				Comments:    [3]string{"" /* encoder.HeadComment */, "Configures host DNS caching resolver." /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
+			{
+				Name:        "imageCache",
+				Type:        "ImageCacheConfig",
+				Note:        "",
+				Description: "Enable Image Cache feature.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Enable Image Cache feature." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+			{
+				Name:        "nodeAddressSortAlgorithm",
+				Type:        "string",
+				Note:        "",
+				Description: "Select the node address sort algorithm.\nThe 'v1' algorithm sorts addresses by the address itself.\nThe 'v2' algorithm prefers more specific prefixes.\nIf unset, defaults to 'v1'.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Select the node address sort algorithm." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
 		},
 	}
 
@@ -3450,6 +3579,31 @@ func (KubePrism) Doc() *encoder.Doc {
 				Note:        "",
 				Description: "KubePrism port.",
 				Comments:    [3]string{"" /* encoder.HeadComment */, "KubePrism port." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+		},
+	}
+
+	return doc
+}
+
+func (ImageCacheConfig) Doc() *encoder.Doc {
+	doc := &encoder.Doc{
+		Type:        "ImageCacheConfig",
+		Comments:    [3]string{"" /* encoder.HeadComment */, "ImageCacheConfig describes the configuration for the Image Cache feature." /* encoder.LineComment */, "" /* encoder.FootComment */},
+		Description: "ImageCacheConfig describes the configuration for the Image Cache feature.",
+		AppearsIn: []encoder.Appearance{
+			{
+				TypeName:  "FeaturesConfig",
+				FieldName: "imageCache",
+			},
+		},
+		Fields: []encoder.Doc{
+			{
+				Name:        "localEnabled",
+				Type:        "bool",
+				Note:        "",
+				Description: "Enable local image cache.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Enable local image cache." /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
 		},
 	}
@@ -3741,8 +3895,15 @@ func (NetworkDeviceSelector) Doc() *encoder.Doc {
 				Name:        "hardwareAddr",
 				Type:        "string",
 				Note:        "",
-				Description: "Device hardware address, supports matching by wildcard.",
-				Comments:    [3]string{"" /* encoder.HeadComment */, "Device hardware address, supports matching by wildcard." /* encoder.LineComment */, "" /* encoder.FootComment */},
+				Description: "Device hardware (MAC) address, supports matching by wildcard.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Device hardware (MAC) address, supports matching by wildcard." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+			{
+				Name:        "permanentAddr",
+				Type:        "string",
+				Note:        "",
+				Description: "Device permanent hardware address, supports matching by wildcard.\nThe permanent address doesn't change when the link is enslaved to a bond,\nso it's recommended to use this field for bond members.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Device permanent hardware address, supports matching by wildcard." /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
 			{
 				Name:        "pciID",
@@ -3827,7 +3988,7 @@ func (DiscoveryRegistriesConfig) Doc() *encoder.Doc {
 				Name:        "kubernetes",
 				Type:        "RegistryKubernetesConfig",
 				Note:        "",
-				Description: "Kubernetes registry uses Kubernetes API server to discover cluster members and stores additional information\nas annotations on the Node resources.",
+				Description: "Kubernetes registry uses Kubernetes API server to discover cluster members and stores additional information\nas annotations on the Node resources.\n\nThis feature is deprecated as it is not compatible with Kubernetes 1.32+.\nSee https://github.com/siderolabs/talos/issues/9980 for more information.",
 				Comments:    [3]string{"" /* encoder.HeadComment */, "Kubernetes registry uses Kubernetes API server to discover cluster members and stores additional information" /* encoder.LineComment */, "" /* encoder.FootComment */},
 			},
 			{
@@ -4088,6 +4249,7 @@ func GetFileDoc() *encoder.FileDoc {
 			ControlPlaneConfig{}.Doc(),
 			APIServerConfig{}.Doc(),
 			AdmissionPluginConfig{}.Doc(),
+			AuthorizationConfigAuthorizerConfig{}.Doc(),
 			ControllerManagerConfig{}.Doc(),
 			ProxyConfig{}.Doc(),
 			SchedulerConfig{}.Doc(),
@@ -4119,6 +4281,7 @@ func GetFileDoc() *encoder.FileDoc {
 			STP{}.Doc(),
 			BridgeVLAN{}.Doc(),
 			Bridge{}.Doc(),
+			BridgePort{}.Doc(),
 			Vlan{}.Doc(),
 			Route{}.Doc(),
 			RegistryMirrorConfig{}.Doc(),
@@ -4128,6 +4291,7 @@ func GetFileDoc() *encoder.FileDoc {
 			SystemDiskEncryptionConfig{}.Doc(),
 			FeaturesConfig{}.Doc(),
 			KubePrism{}.Doc(),
+			ImageCacheConfig{}.Doc(),
 			KubernetesTalosAPIAccessConfig{}.Doc(),
 			HostDNSConfig{}.Doc(),
 			VolumeMountConfig{}.Doc(),

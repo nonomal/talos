@@ -6,6 +6,7 @@
 package decoder
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -38,8 +39,8 @@ const (
 type Decoder struct{}
 
 // Decode decodes all known manifests.
-func (d *Decoder) Decode(r io.Reader) ([]config.Document, error) {
-	return parse(r)
+func (d *Decoder) Decode(r io.Reader, allowPatchDelete bool) ([]config.Document, error) {
+	return parse(r, allowPatchDelete)
 }
 
 // NewDecoder initializes and returns a `Decoder`.
@@ -47,7 +48,14 @@ func NewDecoder() *Decoder {
 	return &Decoder{}
 }
 
-func parse(r io.Reader) (decoded []config.Document, err error) {
+type documentID struct {
+	APIVersion string
+	Kind       string
+	Name       string
+}
+
+//nolint:gocyclo
+func parse(r io.Reader, allowPatchDelete bool) (decoded []config.Document, err error) {
 	// Recover from yaml.v3 panics because we rely on machine configuration loading _a lot_.
 	defer func() {
 		if p := recover(); p != nil {
@@ -61,8 +69,10 @@ func parse(r io.Reader) (decoded []config.Document, err error) {
 
 	dec.KnownFields(true)
 
+	knownDocuments := map[documentID]struct{}{}
+
 	// Iterate through all defined documents.
-	for {
+	for i := 0; ; i++ {
 		var manifests yaml.Node
 
 		if err = dec.Decode(&manifests); err != nil {
@@ -77,7 +87,30 @@ func parse(r io.Reader) (decoded []config.Document, err error) {
 			return nil, errors.New("expected a document")
 		}
 
+		if allowPatchDelete {
+			decoded, err = AppendDeletesTo(&manifests, decoded, i)
+			if err != nil {
+				return nil, err
+			}
+
+			if manifests.IsZero() {
+				continue
+			}
+		}
+
 		for _, manifest := range manifests.Content {
+			id := documentID{
+				APIVersion: findValue(manifest, ManifestAPIVersionKey, false),
+				Kind:       cmp.Or(findValue(manifest, ManifestKindKey, false), "v1alpha1"),
+				Name:       findValue(manifest, "name", false),
+			}
+
+			if _, ok := knownDocuments[id]; ok {
+				return nil, fmt.Errorf("duplicate document %s/%s/%s is not allowed", id.APIVersion, id.Kind, id.Name)
+			}
+
+			knownDocuments[id] = struct{}{}
+
 			var target config.Document
 
 			if target, err = decode(manifest); err != nil {

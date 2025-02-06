@@ -14,7 +14,7 @@ import (
 
 const (
 	// DefaultKernelVersion is the default Linux kernel version.
-	DefaultKernelVersion = "6.6.36-talos"
+	DefaultKernelVersion = "6.12.11-talos"
 
 	// KernelModulesPath is the default path to the kernel modules without the kernel version.
 	KernelModulesPath = "/lib/modules"
@@ -22,6 +22,11 @@ const (
 	// KernelParamConfig is the kernel parameter name for specifying the URL.
 	// to the config.
 	KernelParamConfig = "talos.config"
+
+	// KernelParamConfigInline is the kernel parameter name for specifying the inline config.
+	//
+	// The inline config should be base64 encoded and zstd-compressed.
+	KernelParamConfigInline = "talos.config.inline"
 
 	// KernelParamConfigOAuthClientID is the kernel parameter name for specifying the OAuth2 client ID.
 	KernelParamConfigOAuthClientID = "talos.config.oauth.client_id"
@@ -67,9 +72,15 @@ const (
 	// disk to wipe on the next boot and reboot.
 	KernelParamWipe = "talos.experimental.wipe"
 
-	// KernelParamCGroups is the kernel parameter name for specifying the
-	// cgroups version to use (default is cgroupsv2, setting this kernel arg to '0' forces cgroupsv1).
+	// KernelParamDeviceSettleTime is the kernel parameter name for specifying the
+	// extra device settle timeout.
+	KernelParamDeviceSettleTime = "talos.device.settle_time"
+
+	// KernelParamCGroups is the legacy kernel parameter not supported anymore.
 	KernelParamCGroups = "talos.unified_cgroup_hierarchy"
+
+	// KernelParamAuditdDisabled is the kernel parameter name for disabling auditd service.
+	KernelParamAuditdDisabled = "talos.auditd.disabled"
 
 	// KernelParamDashboardDisabled is the kernel parameter name for disabling the dashboard.
 	KernelParamDashboardDisabled = "talos.dashboard.disabled"
@@ -79,6 +90,15 @@ const (
 
 	// KernelParamNetIfnames is the kernel parameter name to control predictable network interface names.
 	KernelParamNetIfnames = "net.ifnames"
+
+	// KernelParamHaltIfInstalled is the kernel parameter name to control if Talos should pause if booting from boot media while Talos is already installed.
+	KernelParamHaltIfInstalled = "talos.halt_if_installed"
+
+	// KernelParamSELinux is the kernel parameter name to enable/disable SELinux.
+	KernelParamSELinux = "selinux"
+
+	// KernelParamSELinuxEnforcing is the kernel parameter name to control SELinux enforcement mode.
+	KernelParamSELinuxEnforcing = "enforcing"
 
 	// BoardNone indicates that the install is not for a specific board.
 	BoardNone = "none"
@@ -175,6 +195,9 @@ const (
 	// the state path.
 	StateMountPoint = "/system/state"
 
+	// StateSelinuxLabel is the label to be assigned to the state mount.
+	StateSelinuxLabel = "system_u:object_r:system_state_t:s0"
+
 	// BootPartitionLabel is the label of the partition to use for mounting at
 	// the boot path.
 	BootPartitionLabel = "BOOT"
@@ -190,6 +213,12 @@ const (
 	// EphemeralMountPoint is the label of the partition to use for mounting at
 	// the data path.
 	EphemeralMountPoint = "/var"
+
+	// EphemeralSelinuxLabel is the label to be assigned to the ephemeral mount.
+	EphemeralSelinuxLabel = "system_u:object_r:ephemeral_t:s0"
+
+	// OptSELinuxLabel is the SELinux label to be set for /opt overlay mount.
+	OptSELinuxLabel = "system_u:object_r:opt_t:s0"
 
 	// RootMountPoint is the label of the partition to use for mounting at
 	// the root path.
@@ -207,6 +236,12 @@ const (
 
 	// KubernetesConfigBaseDir is the path to the base Kubernetes configuration directory.
 	KubernetesConfigBaseDir = "/etc/kubernetes"
+
+	// KubernetesConfigSELinuxLabel is the SELinux label to be set for the Kubernetes configuration directory overlay mount.
+	KubernetesConfigSELinuxLabel = "system_u:object_r:k8s_conf_t:s0"
+
+	// KubeletPluginsSELinuxLabel is the SELinux label to be set for the Kubernetes plugin directory overlay mount.
+	KubeletPluginsSELinuxLabel = "system_u:object_r:k8s_plugin_t:s0"
 
 	// DefaultCertificatesDir is the path the Kubernetes PKI directory.
 	DefaultCertificatesDir = KubernetesConfigBaseDir + "/" + "pki"
@@ -277,17 +312,32 @@ const (
 	// KubernetesAPIServerSecretsDir defines directory with kube-apiserver secrets.
 	KubernetesAPIServerSecretsDir = KubebernetesStaticSecretsDir + "/" + "kube-apiserver"
 
+	// KubernetesAPIServerSecretsDirSELinuxLabel defines SELinux label for the directory with kube-apiserver secrets.
+	KubernetesAPIServerSecretsDirSELinuxLabel = "system_u:object_r:kube_apiserver_secret_t:s0"
+
 	// KubernetesAPIServerConfigDir defines directory with kube-apiserver configs.
 	KubernetesAPIServerConfigDir = KubebernetesStaticConfigDir + "/" + "kube-apiserver"
+
+	// KubernetesAPIServerConfigDirSELinuxLabel defines SELinux label for the directory with kube-apiserver configs.
+	KubernetesAPIServerConfigDirSELinuxLabel = "system_u:object_r:kube_apiserver_config_t:s0"
 
 	// KubernetesControllerManagerSecretsDir defines ephemeral directory with kube-controller-manager secrets.
 	KubernetesControllerManagerSecretsDir = KubebernetesStaticSecretsDir + "/" + "kube-controller-manager"
 
+	// KubernetesControllerManagerSecretsDirSELinuxLabel defines SELinux label for the ephemeral directory with kube-controller-manager secrets.
+	KubernetesControllerManagerSecretsDirSELinuxLabel = "system_u:object_r:kube_controller_manager_secret_t:s0"
+
 	// KubernetesSchedulerSecretsDir defines ephemeral directory with kube-scheduler secrets.
 	KubernetesSchedulerSecretsDir = KubebernetesStaticSecretsDir + "/" + "kube-scheduler"
 
+	// KubernetesSchedulerSecretsDirSELinuxLabel defines SELinux label for the ephemeral directory with kube-scheduler secrets.
+	KubernetesSchedulerSecretsDirSELinuxLabel = "system_u:object_r:kube_scheduler_secret_t:s0"
+
 	// KubernetesSchedulerConfigDir defines ephemeral directory with kube-scheduler configs.
 	KubernetesSchedulerConfigDir = KubebernetesStaticConfigDir + "/" + "kube-scheduler"
+
+	// KubernetesSchedulerConfigDirSELinuxLabel defines SELinux label for the ephemeral directory with kube-scheduler configs.
+	KubernetesSchedulerConfigDirSELinuxLabel = "system_u:object_r:kube_scheduler_config_t:s0"
 
 	// KubernetesAPIServerRunUser defines UID to the API Server.
 	KubernetesAPIServerRunUser = 65534
@@ -342,7 +392,7 @@ const (
 
 	// DefaultKubernetesVersion is the default target version of the control plane.
 	// renovate: datasource=github-releases depName=kubernetes/kubernetes
-	DefaultKubernetesVersion = "1.31.0-beta.0"
+	DefaultKubernetesVersion = "1.32.1"
 
 	// SupportedKubernetesVersions is the number of Kubernetes versions supported by Talos starting from DefaultKubernesVersion going backwards.
 	SupportedKubernetesVersions = 6
@@ -370,7 +420,7 @@ const (
 
 	// DefaultCoreDNSVersion is the default version for the CoreDNS.
 	// renovate: datasource=docker depName=registry.k8s.io/coredns/coredns
-	DefaultCoreDNSVersion = "v1.11.1"
+	DefaultCoreDNSVersion = "v1.12.0"
 
 	// LabelNodeRoleControlPlane is the node label required by a control plane node.
 	LabelNodeRoleControlPlane = "node-role.kubernetes.io/control-plane"
@@ -390,8 +440,11 @@ const (
 	// KubeletSystemReservedCPU cpu system reservation value for kubelet kubeconfig.
 	KubeletSystemReservedCPU = "50m"
 
-	// KubeletSystemReservedMemory memory system reservation value for kubelet kubeconfig.
-	KubeletSystemReservedMemory = "192Mi"
+	// KubeletSystemReservedMemoryControlPlane memory system reservation value for kubelet kubeconfig (controlplane nodes).
+	KubeletSystemReservedMemoryControlPlane = "512Mi"
+
+	// KubeletSystemReservedMemoryWorker memory system reservation value for kubelet kubeconfig (worker nodes).
+	KubeletSystemReservedMemoryWorker = "384Mi"
 
 	// KubeletSystemReservedPid pid system reservation value for kubelet kubeconfig.
 	KubeletSystemReservedPid = "100"
@@ -401,7 +454,7 @@ const (
 
 	// DefaultEtcdVersion is the default target version of etcd.
 	// renovate: datasource=github-releases depName=etcd-io/etcd
-	DefaultEtcdVersion = "v3.5.14"
+	DefaultEtcdVersion = "v3.5.18"
 
 	// EtcdRootTalosKey is the root etcd key for Talos-specific storage.
 	EtcdRootTalosKey = "talos:v1"
@@ -421,8 +474,14 @@ const (
 	// EtcdPKIPath is the path to the etcd PKI directory.
 	EtcdPKIPath = "/system/secrets/etcd"
 
+	// EtcdPKISELinuxLabel is the SELinux label for the etcd PKI directory.
+	EtcdPKISELinuxLabel = "system_u:object_r:etcd_pki_t:s0"
+
 	// EtcdDataPath is the path where etcd stores its' data.
 	EtcdDataPath = "/var/lib/etcd"
+
+	// EtcdDataSELinuxLabel is the SELinux label for the etcd data directory.
+	EtcdDataSELinuxLabel = "system_u:object_r:etcd_data_t:s0"
 
 	// EtcdRecoverySnapshotPath is the path where etcd snapshot is uploaded for recovery.
 	EtcdRecoverySnapshotPath = "/var/lib/etcd.snapshot"
@@ -473,6 +532,10 @@ const (
 	// We use the same user ID as apid so that the dashboard can write to the machined unix socket.
 	DashboardUserID = ApidUserID
 
+	// DashboardPriority is the priority for the dashboard service.
+	// Higher nice value for the dashboard to give more CPU time to other services when under load.
+	DashboardPriority = 10
+
 	// TrustdPort is the port for the trustd service.
 	TrustdPort = 50001
 
@@ -480,7 +543,7 @@ const (
 	TrustdUserID = 51
 
 	// DefaultContainerdVersion is the default container runtime version.
-	DefaultContainerdVersion = "2.0.0-rc.3"
+	DefaultContainerdVersion = "2.0.2"
 
 	// SystemContainerdNamespace is the Containerd namespace for Talos services.
 	SystemContainerdNamespace = "system"
@@ -509,20 +572,35 @@ const (
 	// CRICustomizationConfigPart is the path to the CRI generated registry configuration relative to /etc.
 	CRICustomizationConfigPart = "cri/conf.d/20-customization.part"
 
+	// CRIBaseRuntimeSpec is the path to the base runtime spec for the CRI.
+	CRIBaseRuntimeSpec = "cri/conf.d/base-spec.json"
+
 	// TalosConfigEnvVar is the environment variable for setting the Talos configuration file path.
 	TalosConfigEnvVar = "TALOSCONFIG"
 
 	// APISocketPath is the path to file socket of apid.
 	APISocketPath = SystemRunPath + "/apid/apid.sock"
 
+	// APISocketLabel is the SELinux label for apid socket file.
+	APISocketLabel = "system_u:object_r:apid_socket_t:s0"
+
 	// APIRuntimeSocketPath is the path to file socket of runtime server for apid.
 	APIRuntimeSocketPath = SystemRunPath + "/apid/runtime.sock"
+
+	// APIRuntimeSocketLabel is the SELinux label for apid runtime socket file.
+	APIRuntimeSocketLabel = "system_u:object_r:apid_runtime_socket_t:s0"
 
 	// TrustdRuntimeSocketPath is the path to file socket of runtime server for trustd.
 	TrustdRuntimeSocketPath = SystemRunPath + "/trustd/runtime.sock"
 
+	// TrustdRuntimeSocketLabel is the SELinux label for trustd runtime socket file.
+	TrustdRuntimeSocketLabel = "system_u:object_r:trustd_runtime_socket_t:s0"
+
 	// MachineSocketPath is the path to file socket of machine API.
 	MachineSocketPath = SystemRunPath + "/machined/machine.sock"
+
+	// MachineSocketLabel is the SELinux label for socket of machine API.
+	MachineSocketLabel = "system_u:object_r:machine_socket_t:s0"
 
 	// NetworkSocketPath is the path to file socket of network API.
 	NetworkSocketPath = SystemRunPath + "/networkd/networkd.sock"
@@ -552,7 +630,7 @@ const (
 	RootfsAsset = "rootfs.sqsh"
 
 	// UKIAsset defines a well known name for our UKI filename.
-	UKIAsset = "vmlinuz.efi.signed"
+	UKIAsset = "vmlinuz.efi"
 
 	// UKIAssetPath is the path to the UKI in the installer.
 	UKIAssetPath = "/usr/install/%s/" + UKIAsset
@@ -623,12 +701,24 @@ const (
 	// https://www.mankier.com/7/systemd-stub#Initrd_Resources
 	PCRPublicKey = SDStubDynamicInitrdPath + "/" + "tpm2-pcr-public-key.pem"
 
+	// UKIPCR is the PCR number where systemd-stub measures the UKI.
+	UKIPCR = 11
+
 	// DefaultCertificateValidityDuration is the default duration for a certificate.
 	DefaultCertificateValidityDuration = x509.DefaultCertificateValidityDuration
 
 	// SystemPath is the path to write temporary runtime system related files
 	// and directories.
 	SystemPath = "/system"
+
+	// SystemSelinuxLabel is the SELinux label for runtime system related files and directories.
+	SystemSelinuxLabel = "system_u:object_r:system_t:s0"
+
+	// RunPath is the path to the system run directory.
+	RunPath = "/run"
+
+	// RunSelinuxLabel is the SELinux label for the run directory.
+	RunSelinuxLabel = "system_u:object_r:run_t:s0"
 
 	// VarSystemOverlaysPath is the path where overlay mounts are created.
 	VarSystemOverlaysPath = "/var/system/overlays"
@@ -639,8 +729,14 @@ const (
 	// SystemVarPath is the path to the system var directory.
 	SystemVarPath = SystemPath + "/var"
 
+	// SystemVarSelinuxLabel is the SELinux label for the system var directory.
+	SystemVarSelinuxLabel = "system_u:object_r:system_var_t:s0"
+
 	// SystemEtcPath is the path to the system etc directory.
 	SystemEtcPath = SystemPath + "/etc"
+
+	// EtcSelinuxLabel is the SELinux label for the /etc and /system/etc directories.
+	EtcSelinuxLabel = "system_u:object_r:etc_t:s0"
 
 	// SystemLibexecPath is the path to the system libexec directory.
 	SystemLibexecPath = SystemPath + "/libexec"
@@ -660,8 +756,14 @@ const (
 	// CgroupInitReservedMemory is the hard memory protection for the init process.
 	CgroupInitReservedMemory = 96 * 1024 * 1024
 
+	// CgroupInitMillicores is the CPU weight for the init process.
+	CgroupInitMillicores = 2000
+
 	// CgroupSystem is the cgroup name for system processes.
 	CgroupSystem = "/system"
+
+	// CgroupSystemMillicores is the CPU weight for the system cgroup.
+	CgroupSystemMillicores = 1500
 
 	// CgroupSystemReservedMemory is the hard memory protection for the system processes.
 	CgroupSystemReservedMemory = 96 * 1024 * 1024
@@ -669,14 +771,68 @@ const (
 	// CgroupSystemRuntime is the cgroup name for containerd runtime processes.
 	CgroupSystemRuntime = CgroupSystem + "/runtime"
 
+	// CgroupSystemRuntimeReservedMemory is the hard memory protection for the system containerd process.
+	CgroupSystemRuntimeReservedMemory = 48 * 1024 * 1024
+
+	// CgroupSystemRuntimeMillicores is the CPU weight for the system containerd process.
+	CgroupSystemRuntimeMillicores = 500
+
+	// SelinuxLabelMachined is the SELinux label for machined.
+	SelinuxLabelMachined = "system_u:system_r:init_t:s0"
+
+	// SelinuxLabelInstaller is the SELinux label for the installer.
+	SelinuxLabelInstaller = "system_u:system_r:installer_t:s0"
+
+	// SelinuxLabelUnconfinedSysContainer is the SELinux label for system containers without label set (normally extensions).
+	SelinuxLabelUnconfinedSysContainer = "system_u:system_r:unconfined_container_t:s0"
+
+	// SelinuxLabelUnconfinedService is the SELinux label for process without label set (normally should not occur).
+	SelinuxLabelUnconfinedService = "system_u:system_r:unconfined_service_t:s0"
+
+	// SelinuxLabelSystemRuntime is the SELinux label for containerd runtime processes.
+	SelinuxLabelSystemRuntime = "system_u:system_r:sys_containerd_t:s0"
+
 	// CgroupApid is the cgroup name for apid runtime processes.
 	CgroupApid = CgroupSystem + "/apid"
+
+	// CgroupApidReservedMemory is the hard memory protection for the apid processes.
+	CgroupApidReservedMemory = 16 * 1024 * 1024
+
+	// CgroupApidMaxMemory is the hard memory limit for the apid process.
+	CgroupApidMaxMemory = 40 * 1024 * 1024
+
+	// CgroupApidMillicores is the CPU weight for the apid process.
+	CgroupApidMillicores = 500
+
+	// SelinuxLabelApid is the SELinux label for apid runtime processes.
+	SelinuxLabelApid = "system_u:system_r:apid_t:s0"
 
 	// CgroupTrustd is the cgroup name for trustd runtime processes.
 	CgroupTrustd = CgroupSystem + "/trustd"
 
+	// CgroupTrustdReservedMemory is the hard memory protection for the trustd processes.
+	CgroupTrustdReservedMemory = 8 * 1024 * 1024
+
+	// CgroupTrustdMaxMemory is the hard memory limit for the trustd process.
+	CgroupTrustdMaxMemory = 24 * 1024 * 1024
+
+	// CgroupTrustdMillicores is the CPU weight for the trustd process.
+	CgroupTrustdMillicores = 250
+
+	// SelinuxLabelTrustd is the SELinux label for trustd runtime processes.
+	SelinuxLabelTrustd = "system_u:system_r:trustd_t:s0"
+
 	// CgroupUdevd is the cgroup name for udevd runtime processes.
 	CgroupUdevd = CgroupSystem + "/udevd"
+
+	// CgroupUdevdReservedMemory is the hard memory protection for the udevd processes.
+	CgroupUdevdReservedMemory = 8 * 1024 * 1024
+
+	// CgroupUdevdMillicores is the CPU weight for the udevd process.
+	CgroupUdevdMillicores = 250
+
+	// SelinuxLabelUdevd is the SELinux label for udevd runtime processes.
+	SelinuxLabelUdevd = "system_u:system_r:udev_t:s0"
 
 	// CgroupExtensions is the cgroup name for system extension processes.
 	CgroupExtensions = CgroupSystem + "/extensions"
@@ -684,26 +840,56 @@ const (
 	// CgroupDashboard is the cgroup name for dashboard process.
 	CgroupDashboard = CgroupSystem + "/dashboard"
 
+	// SelinuxLabelDashboard is the SELinux label for dashboard process.
+	SelinuxLabelDashboard = "system_u:system_r:dashboard_t:s0"
+
+	// CgroupPodRuntimeRoot is the cgroup containing Kubernetes runtime components.
+	CgroupPodRuntimeRoot = "/podruntime"
+
+	// CgroupPodRuntimeRootMillicores is the CPU weight for the pod runtime cgroup.
+	CgroupPodRuntimeRootMillicores = 4000
+
 	// CgroupPodRuntime is the cgroup name for kubernetes containerd runtime processes.
-	CgroupPodRuntime = "/podruntime/runtime"
+	CgroupPodRuntime = CgroupPodRuntimeRoot + "/runtime"
+
+	// CgroupPodRuntimeMillicores is the CPU weight for the pod runtime cgroup.
+	CgroupPodRuntimeMillicores = 1000
+
+	// SelinuxLabelPodRuntime is the SELinux label for kubernetes containerd runtime processes.
+	SelinuxLabelPodRuntime = "system_u:system_r:pod_containerd_t:s0"
 
 	// CgroupPodRuntimeReservedMemory is the hard memory protection for the cri runtime processes.
-	CgroupPodRuntimeReservedMemory = 128 * 1024 * 1024
+	CgroupPodRuntimeReservedMemory = 196 * 1024 * 1024
 
 	// CgroupEtcd is the cgroup name for etcd process.
-	CgroupEtcd = "/podruntime/etcd"
+	CgroupEtcd = CgroupPodRuntimeRoot + "/etcd"
+
+	// CgroupEtcdReservedMemory is the soft memory protection for the etcd processes.
+	CgroupEtcdReservedMemory = 256 * 1024 * 1024
+
+	// CgroupEtcdMillicores is the CPU weight for the etcd process.
+	CgroupEtcdMillicores = 2000
+
+	// SELinuxLabelEtcd is the SELinux label for etcd process.
+	SELinuxLabelEtcd = "system_u:system_r:etcd_t:s0"
 
 	// CgroupKubelet is the cgroup name for kubelet process.
-	CgroupKubelet = "/podruntime/kubelet"
+	CgroupKubelet = CgroupPodRuntimeRoot + "/kubelet"
+
+	// SelinuxLabelKubelet is the SELinux label for kubelet process.
+	SelinuxLabelKubelet = "system_u:system_r:kubelet_t:s0"
 
 	// CgroupKubeletReservedMemory is the hard memory protection for the kubelet processes.
-	CgroupKubeletReservedMemory = 64 * 1024 * 1024
+	CgroupKubeletReservedMemory = 96 * 1024 * 1024
 
-	// CgroupDashboardReservedMemory is the hard memory protection for the dashboard process.
-	CgroupDashboardReservedMemory = 85 * 1024 * 1024
+	// CgroupKubeletMillicores is the CPU weight for the kubelet process.
+	CgroupKubeletMillicores = 1000
 
-	// CgroupDashboardLowMemory is the low memory value for the dashboard process.
-	CgroupDashboardLowMemory = 100 * 1024 * 1024
+	// CgroupDashboardMaxMemory is the hard memory limit for the dashboard process.
+	CgroupDashboardMaxMemory = 196 * 1024 * 1024
+
+	// CgroupDashboardMillicores is the CPU weight for the dashboard process.
+	CgroupDashboardMillicores = 200
 
 	// FlannelCNI is the string to use Tanos-managed Flannel CNI (default).
 	FlannelCNI = "flannel"
@@ -713,6 +899,9 @@ const (
 
 	// NoneCNI is the string to indicate that CNI will not be managed by Talos.
 	NoneCNI = "none"
+
+	// CNISELinuxLabel is the SELinux label to be set for CNI configuration overlay mount.
+	CNISELinuxLabel = "system_u:object_r:cni_conf_t:s0"
 
 	// DefaultIPv4PodNet is the IPv4 network to be used for kubernetes Pods.
 	DefaultIPv4PodNet = "10.244.0.0/16"
@@ -768,8 +957,14 @@ const (
 	// AnnotationOwnedLabels is the annotation key for the list of node labels owned by Talos.
 	AnnotationOwnedLabels = "talos.dev/owned-labels"
 
+	// AnnotationOwnedAnnotations is the annotation key for the list of node annotations owned by Talos.
+	AnnotationOwnedAnnotations = "talos.dev/owned-annotations"
+
 	// AnnotationOwnedTaints is the annotation key for the list of node taints owned by Talos.
 	AnnotationOwnedTaints = "talos.dev/owned-taints"
+
+	// K8sExtensionPrefix is the prefix for node labels/annotations listing extensions.
+	K8sExtensionPrefix = "extensions.talos.dev/"
 
 	// DefaultNTPServer is the NTP server to use if not configured explicitly.
 	DefaultNTPServer = "time.cloudflare.com"
@@ -858,10 +1053,13 @@ const (
 	KubeSpanLinkMinimumMTU = 1280
 
 	// UdevDir is the path to the udev directory.
-	UdevDir = "/usr/etc/udev"
+	UdevDir = "/usr/lib/udev"
 
 	// UdevRulesPath rules file path.
 	UdevRulesPath = UdevDir + "/" + "rules.d/99-talos.rules"
+
+	// UdevRulesLabel rules file SELinux label.
+	UdevRulesLabel = "system_u:object_r:udev_rules_t:s0"
 
 	// LoggingFormatJSONLines represents "JSON lines" logging format.
 	LoggingFormatJSONLines = "json_lines"
@@ -892,11 +1090,17 @@ const (
 	// DBusServiceSocketPath is the path to the D-Bus socket for the logind mock to connect to.
 	DBusServiceSocketPath = SystemRunPath + "/dbus/service.socket"
 
+	// DBusServiceSocketLabel is the SELinux label for the D-Bus socket for the logind mock to connect to.
+	DBusServiceSocketLabel = "system_u:object_r:dbus_service_socket_t:s0"
+
 	// DBusClientSocketPath is the path to the D-Bus socket for the kubelet to connect to.
 	DBusClientSocketPath = "/run/dbus/system_bus_socket"
 
+	// DBusClientSocketLabel is the SELinux label for the D-Bus socket for the kubelet to connect to.
+	DBusClientSocketLabel = "system_u:object_r:dbus_client_socket_t:s0"
+
 	// GoVersion is the version of Go compiler this release was built with.
-	GoVersion = "go1.22.5"
+	GoVersion = "go1.23.5"
 
 	// KubernetesTalosAPIServiceName is the name of the Kubernetes service to access Talos API.
 	KubernetesTalosAPIServiceName = "talos"
@@ -962,7 +1166,7 @@ const (
 	DashboardTTY = 2
 
 	// FlannelVersion is the version of flannel to use.
-	FlannelVersion = "v0.25.3"
+	FlannelVersion = "v0.26.4"
 
 	// PlatformMetal is the name of the metal platform.
 	PlatformMetal = "metal"
@@ -1014,6 +1218,29 @@ const (
 
 	// ConsoleLogErrorSuppressThreshold is the threshold for suppressing console log errors.
 	ConsoleLogErrorSuppressThreshold = 4
+
+	// HostDNSAddress is the address of the host DNS server.
+	//
+	// Note: 116 = 't' and 108 = 'l' in ASCII.
+	HostDNSAddress = "169.254.116.108"
+
+	// MetalAgentModeFlagPath is the path to the file indicating if the node is running in Metal Agent mode.
+	MetalAgentModeFlagPath = "/usr/local/etc/is-metal-agent"
+
+	// ImageCachePartitionLabel is the label for the image cache partition.
+	ImageCachePartitionLabel = "IMAGECACHE"
+
+	// ImageCacheISOMountPoint is the mount point for the image cache ISO.
+	ImageCacheISOMountPoint = "/system/imagecache/iso"
+
+	// ImageCacheDiskMountPoint is the mount point for the image cache partition.
+	ImageCacheDiskMountPoint = "/system/imagecache/disk"
+
+	// RegistrydListenAddress is the address to listen on for the registryd service.
+	RegistrydListenAddress = "127.0.0.1:3172"
+
+	// KubernetesInformerDefaultResyncPeriod is the default resync period for Kubernetes informers.
+	KubernetesInformerDefaultResyncPeriod = 30 * time.Second
 )
 
 // See https://linux.die.net/man/3/klogctl
@@ -1038,12 +1265,18 @@ const (
 	CodeKey         = "code"
 )
 
+// SELinuxLabeledPath is an object used to describe overlay mounts with SELinux labels applied on creation.
+type SELinuxLabeledPath struct {
+	Path  string
+	Label string
+}
+
 // Overlays is the set of paths to create overlay mounts for.
-var Overlays = []string{
-	"/etc/cni",
-	KubernetesConfigBaseDir,
-	"/usr/libexec/kubernetes",
-	"/opt",
+var Overlays = []SELinuxLabeledPath{
+	{"/etc/cni", CNISELinuxLabel},
+	{KubernetesConfigBaseDir, KubernetesConfigSELinuxLabel},
+	{"/usr/libexec/kubernetes", KubeletPluginsSELinuxLabel},
+	{"/opt", OptSELinuxLabel},
 }
 
 // DefaultDroppedCapabilities is the default set of capabilities to drop.

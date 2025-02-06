@@ -36,10 +36,6 @@ It's contents should look like the following:
       dhcp: true
       vip:
         ip: <VIP>
-- op: replace
-  path: /cluster/extraManifests
-  value:
-    - "https://raw.githubusercontent.com/siderolabs/talos-vmtoolsd/master/deploy/latest.yaml"
 ```
 
 With the patch in hand, generate machine configs with:
@@ -93,8 +89,10 @@ If you wish to carry out the manual approach, simply skip ahead to the "Manual A
 ### Scripted Install
 
 Download the `vmware.sh` script to your local machine.
-You can do this by issuing `curl -fsSLO "https://raw.githubusercontent.com/siderolabs/talos/master/website/content/{{< version >}}/talos-guides/install/virtualized-platforms/vmware/vmware.sh"`.
+You can do this by issuing `curl -fsSL "https://raw.githubusercontent.com/siderolabs/talos/master/website/content/{{< version >}}/talos-guides/install/virtualized-platforms/vmware/vmware.sh" | sed s/latest/{{< release >}}/ > vmware.sh`.
 This script has default variables for things like Talos version and cluster name that may be interesting to tweak before deploying.
+
+The script downloads VMWare OVA with `talos-vmtoolsd` from [Image Factory](https://factory.talos.dev/?arch=amd64&cmdline-set=true&extensions=-&extensions=siderolabs%2Fvmtoolsd-guest-agent&platform=vmware&target=cloud&version={{< release >}}) extension pre-installed.
 
 #### Import OVA
 
@@ -120,12 +118,14 @@ You may now skip past the "Manual Approach" section down to "Bootstrap Cluster".
 
 #### Import the OVA into vCenter
 
-A `talos.ova` asset is published with each [release](https://github.com/siderolabs/talos/releases).
+A `talos.ova` asset is available from [Image Factory](https://www.talos.dev/latest/talos-guides/install/boot-assets/#image-factory).
 We will refer to the version of the release as `$TALOS_VERSION` below.
 It can be easily exported with `export TALOS_VERSION="v0.3.0-alpha.10"` or similar.
 
+The download link already includes the `talos-vmtoolsd` extension.
+
 ```bash
-curl -LO https://github.com/siderolabs/talos/releases/download/$TALOS_VERSION/talos.ova
+curl -LO https://factory.talos.dev/image/903b2da78f99adef03cbbd4df6714563823f63218508800751560d3bc3557e40/${TALOS_VERSION}/vmware-amd64.ova
 ```
 
 Create a content library (if needed) with:

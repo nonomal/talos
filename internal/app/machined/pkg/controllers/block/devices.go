@@ -15,6 +15,7 @@ import (
 	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/cosi-project/runtime/pkg/state"
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 
 	"github.com/siderolabs/talos/internal/app/machined/pkg/controllers/block/internal/inotify"
 	"github.com/siderolabs/talos/internal/app/machined/pkg/controllers/block/internal/kobject"
@@ -156,9 +157,7 @@ func (ctrl *DevicesController) resync(ctx context.Context, r controller.Runtime,
 		return fmt.Errorf("failed to list devices: %w", err)
 	}
 
-	for iterator := devices.Iterator(); iterator.Next(); {
-		dev := iterator.Value()
-
+	for dev := range devices.All() {
 		if _, ok := touchedIDs[dev.Metadata().ID()]; ok {
 			continue
 		}
@@ -206,6 +205,10 @@ func (ctrl *DevicesController) processEvent(ctx context.Context, r controller.Ru
 
 			if dev.TypedSpec().Type == "partition" {
 				dev.TypedSpec().Parent = filepath.Base(filepath.Dir(dev.TypedSpec().DevicePath))
+				dev.TypedSpec().Secondaries = nil
+			} else {
+				dev.TypedSpec().Parent = ""
+				dev.TypedSpec().Secondaries = sysblock.ReadSecondaries(ev.DevicePath)
 			}
 
 			dev.TypedSpec().Generation++
@@ -215,7 +218,7 @@ func (ctrl *DevicesController) processEvent(ctx context.Context, r controller.Ru
 			return fmt.Errorf("failed to modify device %q: %w", id, err)
 		}
 
-		if err := inotifyWatcher.Add(devPath); err != nil {
+		if err := inotifyWatcher.Add(devPath, unix.IN_CLOSE_WRITE); err != nil {
 			return fmt.Errorf("failed to add inotify watch for %q: %w", devPath, err)
 		}
 	case kobject.ActionRemove:

@@ -9,6 +9,7 @@ source ./hack/test/e2e.sh
 
 PROVISIONER=qemu
 CLUSTER_NAME="e2e-${PROVISIONER}"
+LOG_ARCHIVE_SUFFIX="${GITHUB_STEP_NAME:-e2e-${PROVISIONER}}"
 
 QEMU_FLAGS=()
 
@@ -39,6 +40,12 @@ esac
 case "${WITH_VIRTUAL_IP:-false}" in
   true)
     QEMU_FLAGS+=("--use-vip")
+    ;;
+esac
+
+case "${WITH_JSON_LOGS:-false}" in
+  true)
+    QEMU_FLAGS+=("--with-json-logs")
     ;;
 esac
 
@@ -116,7 +123,32 @@ case "${WITH_CONFIG_PATCH:-false}" in
   false)
     ;;
   *)
-    QEMU_FLAGS+=("--config-patch=${WITH_CONFIG_PATCH}")
+    [[ ! ${WITH_CONFIG_PATCH} =~ ^@ ]] && echo "WITH_CONFIG_PATCH variable should start with @" && exit 1
+
+    for i in ${WITH_CONFIG_PATCH//:/ }; do
+      QEMU_FLAGS+=("--config-patch=${i}")
+    done
+    ;;
+esac
+
+case "${WITH_ISO:-false}" in
+  false)
+    ;;
+  *)
+    INSTALLER_IMAGE=${INSTALLER_IMAGE}-amd64-secureboot # we don't use secureboot part here, but this installer contains UKIs
+    QEMU_FLAGS+=("--iso-path=${ARTIFACTS}/metal-amd64.iso")
+    ;;
+esac
+
+case "${WITH_CONFIG_PATCH_CONTROLPLANE:-false}" in
+  false)
+    ;;
+  *)
+    [[ ! ${WITH_CONFIG_PATCH_CONTROLPLANE} =~ ^@ ]] && echo "WITH_CONFIG_PATCH_CONTROLPLANE variable should start with @" && exit 1
+
+    for i in ${WITH_CONFIG_PATCH_CONTROLPLANE//:/ }; do
+      QEMU_FLAGS+=("--config-patch-control-plane=${i}")
+    done
     ;;
 esac
 
@@ -124,15 +156,19 @@ case "${WITH_CONFIG_PATCH_WORKER:-false}" in
   false)
     ;;
   *)
-    QEMU_FLAGS+=("--config-patch-worker=${WITH_CONFIG_PATCH_WORKER}")
+    [[ ! ${WITH_CONFIG_PATCH_WORKER} =~ ^@ ]] && echo "WITH_CONFIG_PATCH_WORKER variable should start with @" && exit 1
+
+    for i in ${WITH_CONFIG_PATCH_WORKER//:/ }; do
+      QEMU_FLAGS+=("--config-patch-worker=${i}")
+    done
     ;;
 esac
 
-case "${WITH_SKIP_BOOT_PHASE_FINISHED_CHECK:-false}" in
+case "${WITH_SKIP_K8S_NODE_READINESS_CHECK:-false}" in
   false)
     ;;
   *)
-    QEMU_FLAGS+=("--skip-boot-phase-finished-check")
+    QEMU_FLAGS+=("--skip-k8s-node-readiness-check")
     ;;
 esac
 
@@ -161,6 +197,58 @@ case "${WITH_SIDEROLINK_AGENT:-false}" in
     ;;
 esac
 
+case "${WITH_APPARMOR_LSM_ENABLED:-false}" in
+  false)
+    ;;
+  *)
+    cat <<EOF > "${TMP}/kernel-security.patch"
+machine:
+  install:
+    extraKernelArgs:
+      - -selinux
+      - lsm=lockdown,capability,yama,apparmor,bpf
+      - apparmor=1
+EOF
+
+    QEMU_FLAGS+=("--config-patch=@${TMP}/kernel-security.patch")
+    QEMU_FLAGS+=("--extra-boot-kernel-args=-selinux")
+    ;;
+esac
+
+case "${WITH_CONFIG_INJECTION_METHOD:-default}" in
+  default)
+    ;;
+  *)
+    QEMU_FLAGS+=("--config-injection-method=${WITH_CONFIG_INJECTION_METHOD}")
+    ;;
+esac
+
+case "${WITH_IOMMU:-false}" in
+  false)
+    ;;
+  *)
+    QEMU_FLAGS+=("--with-iommu")
+    ;;
+esac
+
+case "${WITH_4K_DISK:-false}" in
+  false)
+    ;;
+  *)
+    QEMU_FLAGS+=("--disk-block-size=4096")
+    ;;
+esac
+
+case "${WITH_UKI_BOOT:-false}" in
+  false)
+    ;;
+  *)
+    INSTALLER_IMAGE=${INSTALLER_IMAGE}-amd64-secureboot # we don't use secureboot part here, but this installer contains UKIs
+    QEMU_FLAGS+=("--uki-path=_out/metal-amd64-uki.efi")
+    ;;
+esac
+
+
 function create_cluster {
   build_registry_mirrors
 
@@ -169,18 +257,19 @@ function create_cluster {
     --name="${CLUSTER_NAME}" \
     --kubernetes-version="${KUBERNETES_VERSION}" \
     --controlplanes=3 \
-    --workers="${QEMU_WORKERS:-1}" \
-    --disk=15360 \
+    --workers="${QEMU_WORKERS:-2}" \
+    --disk="${QEMU_SYSTEM_DISK_SIZE:-15360}" \
     --extra-disks="${QEMU_EXTRA_DISKS:-0}" \
     --extra-disks-size="${QEMU_EXTRA_DISKS_SIZE:-5120}" \
+    --extra-disks-drivers="${QEMU_EXTRA_DISKS_DRIVERS:-}" \
     --mtu=1430 \
-    --memory=2048 \
+    --memory="${QEMU_MEMORY_CONTROLPLANES:-2048}" \
     --memory-workers="${QEMU_MEMORY_WORKERS:-2048}" \
     --cpus="${QEMU_CPUS:-2}" \
     --cpus-workers="${QEMU_CPUS_WORKERS:-2}" \
     --cidr=172.20.1.0/24 \
-    --user-disk=/var/lib/extra:100MB \
-    --user-disk=/var/lib/p1:100MB:/var/lib/p2:100MB \
+    --user-disk=/var/lib/extra:350MB \
+    --user-disk=/var/lib/p1:350MB:/var/lib/p2:350MB \
     --install-image="${INSTALLER_IMAGE}" \
     --with-init-node=false \
     --cni-bundle-url="${ARTIFACTS}/talosctl-cni-bundle-\${ARCH}.tar.gz" \
@@ -191,8 +280,14 @@ function create_cluster {
 }
 
 function destroy_cluster() {
-  "${TALOSCTL}" cluster destroy --name "${CLUSTER_NAME}" --provisioner "${PROVISIONER}"
+  "${TALOSCTL}" cluster destroy \
+    --name "${CLUSTER_NAME}" \
+    --provisioner "${PROVISIONER}" \
+    --save-cluster-logs-archive-path="/tmp/logs-${LOG_ARCHIVE_SUFFIX}.tar.gz" \
+    --save-support-archive-path="/tmp/support-${LOG_ARCHIVE_SUFFIX}.zip"
 }
+
+trap destroy_cluster SIGINT EXIT
 
 create_cluster
 
@@ -218,6 +313,3 @@ case "${TEST_MODE:-default}" in
     fi
     ;;
 esac
-
-
-destroy_cluster

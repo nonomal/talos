@@ -7,11 +7,13 @@ package container
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/hashicorp/go-multierror"
 	"github.com/siderolabs/gen/xslices"
 
@@ -49,17 +51,19 @@ func New(documents ...config.Document) (*Container, error) {
 
 			container.v1alpha1Config = d
 		default:
-			documentID := d.Kind() + "/"
+			if _, ok := d.(selector); !ok {
+				documentID := d.Kind() + "/"
 
-			if named, ok := d.(config.NamedDocument); ok {
-				documentID += named.Name()
+				if named, ok := d.(config.NamedDocument); ok {
+					documentID += named.Name()
+				}
+
+				if _, alreadySeen := seenDocuments[documentID]; alreadySeen {
+					return nil, fmt.Errorf("duplicate document: %s", documentID)
+				}
+
+				seenDocuments[documentID] = struct{}{}
 			}
-
-			if _, alreadySeen := seenDocuments[documentID]; alreadySeen {
-				return nil, fmt.Errorf("duplicate document: %s", documentID)
-			}
-
-			seenDocuments[documentID] = struct{}{}
 
 			container.documents = append(container.documents, d)
 		}
@@ -91,7 +95,9 @@ func NewV1Alpha1(config *v1alpha1.Config) *Container {
 // Clone the container.
 //
 // Cloned container is not readonly.
-func (container *Container) Clone() coreconfig.Provider {
+func (container *Container) Clone() coreconfig.Provider { return container.clone() }
+
+func (container *Container) clone() *Container {
 	return &Container{
 		v1alpha1Config: container.v1alpha1Config.DeepCopy(),
 		documents:      xslices.Map(container.documents, config.Document.Clone),
@@ -117,7 +123,7 @@ func (container *Container) PatchV1Alpha1(patcher func(*v1alpha1.Config) error) 
 		return !ok
 	})
 
-	return New(append([]config.Document{cfg}, otherDocs...)...)
+	return New(slices.Insert(otherDocs, 0, config.Document(cfg))...)
 }
 
 // Readonly implements config.Container interface.
@@ -192,6 +198,26 @@ func (container *Container) NetworkRules() config.NetworkRuleConfig {
 // TrustedRoots implements config.Config interface.
 func (container *Container) TrustedRoots() config.TrustedRootsConfig {
 	return config.WrapTrustedRootsConfig(findMatchingDocs[config.TrustedRootsConfig](container.documents)...)
+}
+
+// Volumes implements config.Config interface.
+func (container *Container) Volumes() config.VolumesConfig {
+	return config.WrapVolumesConfigList(findMatchingDocs[config.VolumeConfig](container.documents)...)
+}
+
+// KubespanConfig implements config.Config interface.
+func (container *Container) KubespanConfig() config.KubespanConfig {
+	return config.WrapKubespanConfig(findMatchingDocs[config.KubespanConfig](container.documents)...)
+}
+
+// PCIDriverRebindConfig implements config.Config interface.
+func (container *Container) PCIDriverRebindConfig() config.PCIDriverRebindConfig {
+	return config.WrapPCIDriverRebindConfig(findMatchingDocs[config.PCIDriverRebindConfig](container.documents)...)
+}
+
+// EthernetConfigs implements config.Config interface.
+func (container *Container) EthernetConfigs() []config.EthernetConfig {
+	return findMatchingDocs[config.EthernetConfig](container.documents)
 }
 
 // Bytes returns source YAML representation (if available) or does default encoding.
@@ -292,9 +318,38 @@ func (container *Container) Validate(mode validation.RuntimeMode, opt ...validat
 	return warnings, multiErr.ErrorOrNil()
 }
 
+// RuntimeValidate validates the config in the runtime context.
+func (container *Container) RuntimeValidate(ctx context.Context, st state.State, mode validation.RuntimeMode, opt ...validation.Option) ([]string, error) {
+	var (
+		warnings []string
+		err      error
+	)
+
+	if container.v1alpha1Config != nil {
+		warnings, err = container.v1alpha1Config.RuntimeValidate(ctx, st, mode, opt...)
+	}
+
+	var multiErr *multierror.Error
+
+	if err != nil {
+		multiErr = multierror.Append(multiErr, err)
+	}
+
+	for _, doc := range container.documents {
+		if validatableDoc, ok := doc.(config.RuntimeValidator); ok {
+			docWarnings, docErr := validatableDoc.RuntimeValidate(ctx, st, mode, opt...)
+
+			warnings = append(warnings, docWarnings...)
+			multiErr = multierror.Append(multiErr, docErr)
+		}
+	}
+
+	return warnings, multiErr.ErrorOrNil()
+}
+
 // RedactSecrets returns a copy of the Provider with all secrets replaced with the given string.
 func (container *Container) RedactSecrets(replacement string) coreconfig.Provider {
-	clone := container.Clone().(*Container) //nolint:forcetypeassert,errcheck
+	clone := container.clone()
 
 	if clone.v1alpha1Config != nil {
 		clone.v1alpha1Config.Redact(replacement)
@@ -322,14 +377,33 @@ func (container *Container) RawV1Alpha1() *v1alpha1.Config {
 //
 // Documents should not be modified.
 func (container *Container) Documents() []config.Document {
-	docs := slices.Clone(container.documents)
+	result := make([]config.Document, 0, len(container.documents)+1)
 
-	if container.v1alpha1Config != nil {
-		docs = append([]config.Document{container.v1alpha1Config}, docs...)
+	// first we take deletes for v1alpha1
+	for _, doc := range container.documents {
+		if _, ok := doc.(selector); ok && doc.Kind() == v1alpha1.Version {
+			result = append(result, doc)
+		}
 	}
 
-	return docs
+	// then we take the v1alpha1 config
+	if container.v1alpha1Config != nil {
+		result = append(result, container.v1alpha1Config)
+	}
+
+	// then we take the rest
+	for _, doc := range container.documents {
+		if _, ok := doc.(selector); ok && doc.Kind() == v1alpha1.Version {
+			continue
+		}
+
+		result = append(result, doc)
+	}
+
+	return result
 }
+
+type selector interface{ ApplyTo(config.Document) error }
 
 // CompleteForBoot return true if the machine config is enough to proceed with the boot process.
 func (container *Container) CompleteForBoot() bool {

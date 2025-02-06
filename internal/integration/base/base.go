@@ -15,6 +15,11 @@ import (
 	"github.com/siderolabs/talos/pkg/provision/access"
 )
 
+const (
+	// ProvisionerQEMU is the name of the QEMU provisioner.
+	ProvisionerQEMU = "qemu"
+)
+
 // TalosSuite defines most common settings for integration test suites.
 type TalosSuite struct {
 	// Endpoint to use to connect, if not set config is used
@@ -33,6 +38,10 @@ type TalosSuite struct {
 	TalosctlPath string
 	// KubectlPath is a path to kubectl binary
 	KubectlPath string
+	// HelmPath is a path to helm binary
+	HelmPath string
+	// KubeStrPath is a path to kubestr binary
+	KubeStrPath string
 	// ExtensionsQEMU runs tests with qemu and extensions enabled
 	ExtensionsQEMU bool
 	// ExtensionsNvidia runs tests with nvidia extensions enabled
@@ -41,6 +50,10 @@ type TalosSuite struct {
 	TrustedBoot bool
 	// TalosImage is the image name for 'talos' container.
 	TalosImage string
+	// CSITestName is the name of the CSI test to run
+	CSITestName string
+	// CSITestTimeout is the timeout for the CSI test
+	CSITestTimeout string
 
 	discoveredNodes cluster.Info
 }

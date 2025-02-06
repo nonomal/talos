@@ -40,6 +40,7 @@ import (
 	"github.com/siderolabs/talos/internal/app/machined/pkg/runtime"
 	runtimelogging "github.com/siderolabs/talos/internal/app/machined/pkg/runtime/logging"
 	"github.com/siderolabs/talos/internal/app/machined/pkg/system"
+	"github.com/siderolabs/talos/internal/pkg/mount"
 	"github.com/siderolabs/talos/pkg/logging"
 	talosconfig "github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
@@ -67,7 +68,7 @@ func NewController(v1alpha1Runtime runtime.Runtime) (*Controller, error) {
 
 	var err error
 
-	ctrl.logger, err = ctrl.makeLogger("controller-runtime")
+	ctrl.logger, err = ctrl.MakeLogger("controller-runtime")
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +83,7 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 	// adjust the log level based on machine configuration
 	go ctrl.watchMachineConfig(ctx)
 
-	dnsCacheLogger, err := ctrl.makeLogger("dns-resolve-cache")
+	dnsCacheLogger, err := ctrl.MakeLogger("dns-resolve-cache")
 	if err != nil {
 		return err
 	}
@@ -93,7 +94,16 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		},
 		&block.DiscoveryController{},
 		&block.DisksController{},
+		&block.LVMActivationController{
+			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
+		},
+		&block.SymlinksController{},
 		&block.SystemDiskController{},
+		&block.UserDiskConfigController{},
+		&block.VolumeConfigController{
+			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
+		},
+		&block.VolumeManagerController{},
 		&cluster.AffiliateMergeController{},
 		cluster.NewConfigController(),
 		&cluster.DiscoveryServiceController{},
@@ -114,11 +124,18 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 			PlatformEvent: &platformEventer{
 				platform: ctrl.v1alpha1Runtime.State().Platform(),
 			},
+			Mode:           ctrl.v1alpha1Runtime.State().Platform().Mode(),
+			CmdlineGetter:  procfs.ProcCmdline,
 			ConfigSetter:   ctrl.v1alpha1Runtime,
 			EventPublisher: ctrl.v1alpha1Runtime.Events(),
 			ValidationMode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
+			ResourceState:  ctrl.v1alpha1Runtime.State().V1Alpha2().Resources(),
 		},
 		&config.MachineTypeController{},
+		&cri.ImageCacheConfigController{
+			V1Alpha1ServiceManager: system.Services(ctrl.v1alpha1Runtime),
+			VolumeMounter:          mount.IdempotentSystemPartitionMounter(ctrl.v1alpha1Runtime),
+		},
 		&cri.SeccompProfileController{},
 		&cri.SeccompProfileFileController{
 			V1Alpha1Mode:             ctrl.v1alpha1Runtime.State().Platform().Mode(),
@@ -129,13 +146,24 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&etcd.PKIController{},
 		&etcd.SpecController{},
 		&etcd.MemberController{},
+		&files.CRIBaseRuntimeSpecController{},
 		&files.CRIConfigPartsController{},
 		&files.CRIRegistryConfigController{},
 		&files.EtcFileController{
 			EtcPath:    "/etc",
 			ShadowPath: constants.SystemEtcPath,
 		},
+		&files.IQNController{
+			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
+		},
+		&files.NQNController{
+			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
+		},
 		&hardware.PCIDevicesController{
+			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
+		},
+		&hardware.PCIDriverRebindConfigController{},
+		&hardware.PCIDriverRebindController{
 			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
 		},
 		&hardware.SystemInfoController{
@@ -145,6 +173,7 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		k8s.NewControlPlaneAPIServerController(),
 		k8s.NewControlPlaneAdmissionControlController(),
 		k8s.NewControlPlaneAuditPolicyController(),
+		k8s.NewControlPlaneAuthorizationController(),
 		k8s.NewControlPlaneBootstrapManifestsController(),
 		k8s.NewControlPlaneControllerManagerController(),
 		k8s.NewControlPlaneExtraManifestsController(),
@@ -168,6 +197,7 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&k8s.ManifestController{},
 		k8s.NewNodeIPConfigController(),
 		&k8s.NodeIPController{},
+		&k8s.NodeAnnotationSpecController{},
 		&k8s.NodeApplyController{},
 		&k8s.NodeCordonedSpecController{},
 		&k8s.NodeLabelSpecController{},
@@ -194,7 +224,7 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&network.AddressEventController{
 			V1Alpha1Events: ctrl.v1alpha1Runtime.Events(),
 		},
-		&network.AddressMergeController{},
+		network.NewAddressMergeController(),
 		&network.AddressSpecController{},
 		&network.AddressStatusController{},
 		&network.DeviceConfigController{},
@@ -207,28 +237,32 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 			PodResolvConfPath: constants.PodResolvConfPath,
 			V1Alpha1Mode:      ctrl.v1alpha1Runtime.State().Platform().Mode(),
 		},
+		&network.EthernetConfigController{},
+		&network.EthernetSpecController{},
+		&network.EthernetStatusController{},
 		&network.HardwareAddrController{},
 		&network.HostDNSConfigController{},
 		&network.HostnameConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.HostnameMergeController{},
+		network.NewHostnameMergeController(),
 		&network.HostnameSpecController{
 			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
 		},
 		&network.LinkConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.LinkMergeController{},
+		network.NewLinkMergeController(),
 		&network.LinkSpecController{},
 		&network.LinkStatusController{},
 		&network.NfTablesChainConfigController{},
 		&network.NfTablesChainController{},
 		&network.NodeAddressController{},
+		&network.NodeAddressSortAlgorithmController{},
 		&network.OperatorConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.OperatorMergeController{},
+		network.NewOperatorMergeController(),
 		&network.OperatorSpecController{
 			V1alpha1Platform: ctrl.v1alpha1Runtime.State().Platform(),
 			State:            ctrl.v1alpha1Runtime.State().V1Alpha2().Resources(),
@@ -244,12 +278,12 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&network.ResolverConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.ResolverMergeController{},
+		network.NewResolverMergeController(),
 		&network.ResolverSpecController{},
 		&network.RouteConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.RouteMergeController{},
+		network.NewRouteMergeController(),
 		&network.RouteSpecController{},
 		&network.RouteStatusController{},
 		&network.StatusController{
@@ -258,9 +292,10 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&network.TimeServerConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.TimeServerMergeController{},
+		network.NewTimeServerMergeController(),
 		&network.TimeServerSpecController{},
 		&perf.StatsController{},
+		cri.NewRegistriesConfigController(),
 		&runtimecontrollers.CRIImageGCController{},
 		&runtimecontrollers.DevicesStatusController{
 			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
@@ -304,7 +339,9 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 			Drainer: drainer,
 		},
 		&runtimecontrollers.MaintenanceConfigController{},
-		&runtimecontrollers.MaintenanceServiceController{},
+		&runtimecontrollers.MaintenanceServiceController{
+			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
+		},
 		&runtimecontrollers.MachineStatusController{
 			V1Alpha1Events: ctrl.v1alpha1Runtime.Events(),
 		},
@@ -508,8 +545,9 @@ func (ctrl *Controller) updateLoggingConfig(ctx context.Context, dests []talosco
 	wg.Wait()
 }
 
-func (ctrl *Controller) makeLogger(s string) (*zap.Logger, error) {
-	logWriter, err := ctrl.loggingManager.ServiceLog(s).Writer()
+// MakeLogger creates a logger for a service.
+func (ctrl *Controller) MakeLogger(serviceName string) (*zap.Logger, error) {
+	logWriter, err := ctrl.loggingManager.ServiceLog(serviceName).Writer()
 	if err != nil {
 		return nil, err
 	}
@@ -523,5 +561,5 @@ func (ctrl *Controller) makeLogger(s string) (*zap.Logger, error) {
 			logging.WithoutLogLevels(),
 			logging.WithControllerErrorSuppressor(constants.ConsoleLogErrorSuppressThreshold),
 		),
-	).With(logging.Component(s)), nil
+	).With(logging.Component(serviceName)), nil
 }

@@ -5,7 +5,9 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math/big"
@@ -20,11 +22,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/cli/opts"
 	"github.com/dustin/go-humanize"
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-getter/v2"
+	"github.com/klauspost/compress/zstd"
+	"github.com/siderolabs/crypto/x509"
 	"github.com/siderolabs/gen/maps"
-	"github.com/siderolabs/go-blockdevice/blockdevice/encryption"
+	"github.com/siderolabs/go-blockdevice/v2/encryption"
 	"github.com/siderolabs/go-kubeconfig"
 	"github.com/siderolabs/go-pointer"
 	"github.com/siderolabs/go-procfs/procfs"
@@ -40,12 +45,16 @@ import (
 	clientconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
 	"github.com/siderolabs/talos/pkg/machinery/config"
 	"github.com/siderolabs/talos/pkg/machinery/config/bundle"
+	"github.com/siderolabs/talos/pkg/machinery/config/configloader"
 	"github.com/siderolabs/talos/pkg/machinery/config/configpatcher"
+	"github.com/siderolabs/talos/pkg/machinery/config/container"
 	"github.com/siderolabs/talos/pkg/machinery/config/encoder"
 	"github.com/siderolabs/talos/pkg/machinery/config/generate"
 	"github.com/siderolabs/talos/pkg/machinery/config/machine"
+	"github.com/siderolabs/talos/pkg/machinery/config/types/security"
 	"github.com/siderolabs/talos/pkg/machinery/config/types/v1alpha1"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/version"
 	"github.com/siderolabs/talos/pkg/provision"
@@ -80,6 +89,8 @@ const (
 	controlPlanePortFlag         = "control-plane-port"
 	firewallFlag                 = "with-firewall"
 	tpm2EnabledFlag              = "with-tpm2"
+	withDebugShellFlag           = "with-debug-shell"
+	withIOMMUFlag                = "with-iommu"
 
 	// The following flags are the gen options - the options that are only used in machine configuration (i.e., not during the qemu/docker provisioning).
 	// They are not applicable when no machine configuration is generated, hence mutually exclusive with the --input-dir flag.
@@ -101,87 +112,94 @@ const (
 )
 
 var (
-	talosconfig                string
-	nodeImage                  string
-	nodeInstallImage           string
-	registryMirrors            []string
-	registryInsecure           []string
-	kubernetesVersion          string
-	nodeVmlinuzPath            string
-	nodeInitramfsPath          string
-	nodeISOPath                string
-	nodeDiskImagePath          string
-	nodeIPXEBootScript         string
-	applyConfigEnabled         bool
-	bootloaderEnabled          bool
-	uefiEnabled                bool
-	tpm2Enabled                bool
-	extraUEFISearchPaths       []string
-	configDebug                bool
-	networkCIDR                string
-	networkNoMasqueradeCIDRs   []string
-	networkMTU                 int
-	networkIPv4                bool
-	networkIPv6                bool
-	wireguardCIDR              string
-	nameservers                []string
-	dnsDomain                  string
-	workers                    int
-	controlplanes              int
-	controlPlaneCpus           string
-	workersCpus                string
-	controlPlaneMemory         int
-	workersMemory              int
-	clusterDiskSize            int
-	clusterDiskPreallocate     bool
-	clusterDisks               []string
-	extraDisks                 int
-	extraDiskSize              int
-	extraDisksDrivers          []string
-	targetArch                 string
-	clusterWait                bool
-	clusterWaitTimeout         time.Duration
-	forceInitNodeAsEndpoint    bool
-	forceEndpoint              string
-	inputDir                   string
-	cniBinPath                 []string
-	cniConfDir                 string
-	cniCacheDir                string
-	cniBundleURL               string
-	ports                      string
-	dockerHostIP               string
-	withInitNode               bool
-	customCNIUrl               string
-	crashdumpOnFailure         bool
-	skipKubeconfig             bool
-	skipInjectingConfig        bool
-	talosVersion               string
-	encryptStatePartition      bool
-	encryptEphemeralPartition  bool
-	useVIP                     bool
-	enableKubeSpan             bool
-	enableClusterDiscovery     bool
-	configPatch                []string
-	configPatchControlPlane    []string
-	configPatchWorker          []string
-	badRTC                     bool
-	extraBootKernelArgs        string
-	dockerDisableIPv6          bool
-	controlPlanePort           int
-	kubePrismPort              int
-	dhcpSkipHostname           bool
-	skipBootPhaseFinishedCheck bool
-	networkChaos               bool
-	jitter                     time.Duration
-	latency                    time.Duration
-	packetLoss                 float64
-	packetReorder              float64
-	packetCorrupt              float64
-	bandwidth                  int
-	diskEncryptionKeyTypes     []string
-	withFirewall               string
-	withUUIDHostnames          bool
-	withSiderolinkAgent        agentFlag
+	talosconfig               string
+	nodeImage                 string
+	nodeInstallImage          string
+	registryMirrors           []string
+	registryInsecure          []string
+	kubernetesVersion         string
+	nodeVmlinuzPath           string
+	nodeInitramfsPath         string
+	nodeISOPath               string
+	nodeUSBPath               string
+	nodeUKIPath               string
+	nodeDiskImagePath         string
+	nodeIPXEBootScript        string
+	applyConfigEnabled        bool
+	bootloaderEnabled         bool
+	uefiEnabled               bool
+	tpm2Enabled               bool
+	extraUEFISearchPaths      []string
+	configDebug               bool
+	networkCIDR               string
+	networkNoMasqueradeCIDRs  []string
+	networkMTU                int
+	networkIPv4               bool
+	networkIPv6               bool
+	wireguardCIDR             string
+	nameservers               []string
+	dnsDomain                 string
+	workers                   int
+	controlplanes             int
+	controlPlaneCpus          string
+	workersCpus               string
+	controlPlaneMemory        int
+	workersMemory             int
+	clusterDiskSize           int
+	clusterDiskPreallocate    bool
+	diskBlockSize             uint
+	clusterDisks              []string
+	extraDisks                int
+	extraDiskSize             int
+	extraDisksDrivers         []string
+	targetArch                string
+	clusterWait               bool
+	clusterWaitTimeout        time.Duration
+	forceInitNodeAsEndpoint   bool
+	forceEndpoint             string
+	inputDir                  string
+	cniBinPath                []string
+	cniConfDir                string
+	cniCacheDir               string
+	cniBundleURL              string
+	ports                     string
+	dockerHostIP              string
+	withInitNode              bool
+	customCNIUrl              string
+	skipKubeconfig            bool
+	skipInjectingConfig       bool
+	talosVersion              string
+	encryptStatePartition     bool
+	encryptEphemeralPartition bool
+	useVIP                    bool
+	enableKubeSpan            bool
+	enableClusterDiscovery    bool
+	configPatch               []string
+	configPatchControlPlane   []string
+	configPatchWorker         []string
+	badRTC                    bool
+	extraBootKernelArgs       string
+	dockerDisableIPv6         bool
+	controlPlanePort          int
+	kubePrismPort             int
+	dhcpSkipHostname          bool
+	skipK8sNodeReadinessCheck bool
+	networkChaos              bool
+	jitter                    time.Duration
+	latency                   time.Duration
+	packetLoss                float64
+	packetReorder             float64
+	packetCorrupt             float64
+	bandwidth                 int
+	diskEncryptionKeyTypes    []string
+	withFirewall              string
+	withUUIDHostnames         bool
+	withSiderolinkAgent       agentFlag
+	withJSONLogs              bool
+	debugShellEnabled         bool
+	withIOMMU                 bool
+	configInjectionMethodFlag string
+	mountOpts                 opts.MountOpt
 )
 
 // createCmd represents the cluster up command.
@@ -194,19 +212,38 @@ var createCmd = &cobra.Command{
 	},
 }
 
+//nolint:gocyclo
 func downloadBootAssets(ctx context.Context) error {
 	// download & cache images if provides as URLs
-	for _, downloadableImage := range []*string{
-		&nodeVmlinuzPath,
-		&nodeInitramfsPath,
-		&nodeISOPath,
-		&nodeDiskImagePath,
+	for _, downloadableImage := range []struct {
+		path           *string
+		disableArchive bool
+	}{
+		{
+			path: &nodeVmlinuzPath,
+		},
+		{
+			path:           &nodeInitramfsPath,
+			disableArchive: true,
+		},
+		{
+			path: &nodeISOPath,
+		},
+		{
+			path: &nodeUSBPath,
+		},
+		{
+			path: &nodeUKIPath,
+		},
+		{
+			path: &nodeDiskImagePath,
+		},
 	} {
-		if *downloadableImage == "" {
+		if *downloadableImage.path == "" {
 			continue
 		}
 
-		u, err := url.Parse(*downloadableImage)
+		u, err := url.Parse(*downloadableImage.path)
 		if err != nil || !(u.Scheme == "http" || u.Scheme == "https") {
 			// not a URL
 			continue
@@ -229,7 +266,7 @@ func downloadBootAssets(ctx context.Context) error {
 
 		_, err = os.Stat(filepath.Join(cacheDir, destPath))
 		if err == nil {
-			*downloadableImage = filepath.Join(cacheDir, destPath)
+			*downloadableImage.path = filepath.Join(cacheDir, destPath)
 
 			// already cached
 			continue
@@ -246,6 +283,14 @@ func downloadBootAssets(ctx context.Context) error {
 			},
 		}
 
+		if downloadableImage.disableArchive {
+			q := u.Query()
+
+			q.Set("archive", "false")
+
+			u.RawQuery = q.Encode()
+		}
+
 		_, err = client.Get(ctx, &getter.Request{
 			Src:     u.String(),
 			Dst:     filepath.Join(cacheDir, destPath),
@@ -258,7 +303,7 @@ func downloadBootAssets(ctx context.Context) error {
 			return err
 		}
 
-		*downloadableImage = filepath.Join(cacheDir, destPath)
+		*downloadableImage.path = filepath.Join(cacheDir, destPath)
 	}
 
 	return nil
@@ -429,6 +474,8 @@ func create(ctx context.Context) error {
 		KernelPath:     nodeVmlinuzPath,
 		InitramfsPath:  nodeInitramfsPath,
 		ISOPath:        nodeISOPath,
+		USBPath:        nodeUSBPath,
+		UKIPath:        nodeUKIPath,
 		IPXEBootScript: nodeIPXEBootScript,
 		DiskImagePath:  nodeDiskImagePath,
 
@@ -441,12 +488,20 @@ func create(ctx context.Context) error {
 		provision.WithBootlader(bootloaderEnabled),
 		provision.WithUEFI(uefiEnabled),
 		provision.WithTPM2(tpm2Enabled),
+		provision.WithDebugShell(debugShellEnabled),
+		provision.WithIOMMU(withIOMMU),
 		provision.WithExtraUEFISearchPaths(extraUEFISearchPaths),
 		provision.WithTargetArch(targetArch),
 		provision.WithSiderolinkAgent(withSiderolinkAgent.IsEnabled()),
 	}
 
 	var configBundleOpts []bundle.Option
+
+	if debugShellEnabled {
+		if provisionerName != "qemu" {
+			return errors.New("debug shell only supported with qemu provisioner")
+		}
+	}
 
 	if ports != "" {
 		if provisionerName != docker {
@@ -473,12 +528,12 @@ func create(ctx context.Context) error {
 		}
 
 		for _, registryMirror := range registryMirrors {
-			components := strings.SplitN(registryMirror, "=", 2)
-			if len(components) != 2 {
+			left, right, ok := strings.Cut(registryMirror, "=")
+			if !ok {
 				return fmt.Errorf("invalid registry mirror spec: %q", registryMirror)
 			}
 
-			genOptions = append(genOptions, generate.WithRegistryMirror(components[0], components[1]))
+			genOptions = append(genOptions, generate.WithRegistryMirror(left, right))
 		}
 
 		for _, registryHost := range registryInsecure {
@@ -551,7 +606,7 @@ func create(ctx context.Context) error {
 						return err
 					}
 
-					port := 4050
+					const port = 4050
 
 					keys = append(keys, &v1alpha1.EncryptionKey{
 						KeyKMS: &v1alpha1.EncryptionKeyKMS{
@@ -731,6 +786,51 @@ func create(ctx context.Context) error {
 		)
 	}
 
+	var slb *siderolinkBuilder
+
+	if withSiderolinkAgent.IsEnabled() {
+		slb, err = newSiderolinkBuilder(gatewayIPs[0].String(), withSiderolinkAgent.IsTLS())
+		if err != nil {
+			return err
+		}
+	}
+
+	if trustedRootsConfig := slb.TrustedRootsConfig(); trustedRootsConfig != nil {
+		trustedRootsPatch, err := configloader.NewFromBytes(trustedRootsConfig)
+		if err != nil {
+			return fmt.Errorf("error loading trusted roots config: %w", err)
+		}
+
+		configBundleOpts = append(configBundleOpts, bundle.WithPatch([]configpatcher.Patch{configpatcher.NewStrategicMergePatch(trustedRootsPatch)}))
+	}
+
+	if withJSONLogs {
+		const port = 4003
+
+		provisionOptions = append(provisionOptions, provision.WithJSONLogs(nethelpers.JoinHostPort(gatewayIPs[0].String(), port)))
+
+		cfg := container.NewV1Alpha1(
+			&v1alpha1.Config{
+				ConfigVersion: "v1alpha1",
+				MachineConfig: &v1alpha1.MachineConfig{
+					MachineLogging: &v1alpha1.LoggingConfig{
+						LoggingDestinations: []v1alpha1.LoggingDestination{
+							{
+								LoggingEndpoint: &v1alpha1.Endpoint{
+									URL: &url.URL{
+										Scheme: "tcp",
+										Host:   nethelpers.JoinHostPort(gatewayIPs[0].String(), port),
+									},
+								},
+								LoggingFormat: "json_lines",
+							},
+						},
+					},
+				},
+			})
+		configBundleOpts = append(configBundleOpts, bundle.WithPatch([]configpatcher.Patch{configpatcher.NewStrategicMergePatch(cfg)}))
+	}
+
 	configBundle, err := bundle.NewBundle(configBundleOpts...)
 	if err != nil {
 		return err
@@ -751,7 +851,7 @@ func create(ctx context.Context) error {
 		types := []machine.Type{machine.TypeControlPlane, machine.TypeWorker}
 
 		if withInitNode {
-			types = append([]machine.Type{machine.TypeInit}, types...)
+			types = slices.Insert(types, 0, machine.TypeInit)
 		}
 
 		if err = configBundle.Write(".", encoder.CommentsAll, types...); err != nil {
@@ -774,15 +874,6 @@ func create(ctx context.Context) error {
 		extraKernelArgs = procfs.NewCmdline(extraBootKernelArgs)
 	}
 
-	var slb *siderolinkBuilder
-
-	if withSiderolinkAgent.IsEnabled() {
-		slb, err = newSiderolinkBuilder(gatewayIPs[0].String())
-		if err != nil {
-			return err
-		}
-	}
-
 	err = slb.SetKernelArgs(extraKernelArgs, withSiderolinkAgent.IsTunnel())
 	if err != nil {
 		return err
@@ -790,6 +881,17 @@ func create(ctx context.Context) error {
 
 	// Add talosconfig to provision options, so we'll have it to parse there
 	provisionOptions = append(provisionOptions, provision.WithTalosConfig(configBundle.TalosConfig()))
+
+	var configInjectionMethod provision.ConfigInjectionMethod
+
+	switch configInjectionMethodFlag {
+	case "", "default", "http":
+		configInjectionMethod = provision.ConfigInjectionMethodHTTP
+	case "metal-iso":
+		configInjectionMethod = provision.ConfigInjectionMethodMetalISO
+	default:
+		return fmt.Errorf("unknown config injection method %q", configInjectionMethod)
+	}
 
 	// Create the controlplane nodes.
 	for i := range controlplanes {
@@ -808,16 +910,19 @@ func create(ctx context.Context) error {
 		}
 
 		nodeReq := provision.NodeRequest{
-			Name:                nodeName(clusterName, "controlplane", i+1, nodeUUID),
-			Type:                machine.TypeControlPlane,
-			IPs:                 nodeIPs,
-			Memory:              controlPlaneMemory,
-			NanoCPUs:            controlPlaneNanoCPUs,
-			Disks:               disks,
-			SkipInjectingConfig: skipInjectingConfig,
-			BadRTC:              badRTC,
-			ExtraKernelArgs:     extraKernelArgs,
-			UUID:                pointer.To(nodeUUID),
+			Name:                  nodeName(clusterName, "controlplane", i+1, nodeUUID),
+			Type:                  machine.TypeControlPlane,
+			Quirks:                quirks.New(talosVersion),
+			IPs:                   nodeIPs,
+			Memory:                controlPlaneMemory,
+			NanoCPUs:              controlPlaneNanoCPUs,
+			Disks:                 disks,
+			Mounts:                mountOpts.Value(),
+			SkipInjectingConfig:   skipInjectingConfig,
+			ConfigInjectionMethod: configInjectionMethod,
+			BadRTC:                badRTC,
+			ExtraKernelArgs:       extraKernelArgs,
+			UUID:                  pointer.To(nodeUUID),
 		}
 
 		if withInitNode && i == 0 {
@@ -835,12 +940,18 @@ func create(ctx context.Context) error {
 		}
 
 		nodeReq.Config = cfg
+
 		request.Nodes = append(request.Nodes, nodeReq)
 	}
 
 	// append extra disks
 	for i := range extraDisks {
 		driver := "ide"
+
+		// ide driver is not supported on arm64
+		if targetArch == "arm64" {
+			driver = "virtio"
+		}
 
 		if i < len(extraDisksDrivers) {
 			driver = extraDisksDrivers[i]
@@ -850,6 +961,7 @@ func create(ctx context.Context) error {
 			Size:            uint64(extraDiskSize) * 1024 * 1024,
 			SkipPreallocate: !clusterDiskPreallocate,
 			Driver:          driver,
+			BlockSize:       diskBlockSize,
 		})
 	}
 
@@ -877,17 +989,20 @@ func create(ctx context.Context) error {
 
 		request.Nodes = append(request.Nodes,
 			provision.NodeRequest{
-				Name:                nodeName(clusterName, "worker", i, nodeUUID),
-				Type:                machine.TypeWorker,
-				IPs:                 nodeIPs,
-				Memory:              workerMemory,
-				NanoCPUs:            workerNanoCPUs,
-				Disks:               disks,
-				Config:              cfg,
-				SkipInjectingConfig: skipInjectingConfig,
-				BadRTC:              badRTC,
-				ExtraKernelArgs:     extraKernelArgs,
-				UUID:                pointer.To(nodeUUID),
+				Name:                  nodeName(clusterName, "worker", i, nodeUUID),
+				Type:                  machine.TypeWorker,
+				IPs:                   nodeIPs,
+				Quirks:                quirks.New(talosVersion),
+				Memory:                workerMemory,
+				NanoCPUs:              workerNanoCPUs,
+				Disks:                 disks,
+				Mounts:                mountOpts.Value(),
+				Config:                cfg,
+				ConfigInjectionMethod: configInjectionMethod,
+				SkipInjectingConfig:   skipInjectingConfig,
+				BadRTC:                badRTC,
+				ExtraKernelArgs:       extraKernelArgs,
+				UUID:                  pointer.To(nodeUUID),
 			})
 	}
 
@@ -896,6 +1011,21 @@ func create(ctx context.Context) error {
 	cluster, err := provisioner.Create(ctx, request, provisionOptions...)
 	if err != nil {
 		return err
+	}
+
+	if debugShellEnabled {
+		fmt.Println("You can now connect to debug shell on any node using these commands:")
+
+		for _, node := range request.Nodes {
+			talosDir, err := clientconfig.GetTalosDirectory()
+			if err != nil {
+				return nil
+			}
+
+			fmt.Printf("socat - UNIX-CONNECT:%s\n", filepath.Join(talosDir, "clusters", clusterName, node.Name+".serial"))
+		}
+
+		return nil
 	}
 
 	// No talosconfig in the bundle - skip the operations below
@@ -919,10 +1049,6 @@ func create(ctx context.Context) error {
 	}
 
 	if err = postCreate(ctx, clusterAccess); err != nil {
-		if crashdumpOnFailure {
-			provisioner.CrashDump(ctx, cluster, os.Stderr)
-		}
-
 		return err
 	}
 
@@ -954,8 +1080,8 @@ func postCreate(ctx context.Context, clusterAccess *access.Adapter) error {
 
 	checks := check.DefaultClusterChecks()
 
-	if skipBootPhaseFinishedCheck {
-		checks = check.PreBootSequenceChecks()
+	if skipK8sNodeReadinessCheck {
+		checks = slices.Concat(check.PreBootSequenceChecks(), check.K8sComponentsReadinessChecks())
 	}
 
 	checks = append(checks, check.ExtraClusterChecks()...)
@@ -1054,12 +1180,15 @@ func parseCPUShare(cpus string) (int64, error) {
 }
 
 func getDisks() ([]*provision.Disk, error) {
+	const GPTAlignment = 2 * 1024 * 1024 // 2 MB
+
 	// should have at least a single primary disk
 	disks := []*provision.Disk{
 		{
 			Size:            uint64(clusterDiskSize) * 1024 * 1024,
 			SkipPreallocate: !clusterDiskPreallocate,
 			Driver:          "virtio",
+			BlockSize:       diskBlockSize,
 		},
 	}
 
@@ -1103,11 +1232,12 @@ func getDisks() ([]*provision.Disk, error) {
 		}
 
 		disks = append(disks, &provision.Disk{
-			// add 1 MB to make extra room for GPT and alignment
-			Size:            diskSize + 2*1024*1024,
+			// add 2 MB per partition to make extra room for GPT and alignment
+			Size:            diskSize + GPTAlignment*uint64(len(diskPartitions)+1),
 			Partitions:      diskPartitions,
 			SkipPreallocate: !clusterDiskPreallocate,
 			Driver:          "ide",
+			BlockSize:       diskBlockSize,
 		})
 	}
 
@@ -1129,6 +1259,8 @@ func init() {
 	createCmd.Flags().StringVar(&nodeInstallImage, nodeInstallImageFlag, helpers.DefaultImage(images.DefaultInstallerImageRepository), "the installer image to use")
 	createCmd.Flags().StringVar(&nodeVmlinuzPath, "vmlinuz-path", helpers.ArtifactPath(constants.KernelAssetWithArch), "the compressed kernel image to use")
 	createCmd.Flags().StringVar(&nodeISOPath, "iso-path", "", "the ISO path to use for the initial boot (VM only)")
+	createCmd.Flags().StringVar(&nodeUSBPath, "usb-path", "", "the USB stick image path to use for the initial boot (VM only)")
+	createCmd.Flags().StringVar(&nodeUKIPath, "uki-path", "", "the UKI image path to use for the initial boot (VM only)")
 	createCmd.Flags().StringVar(&nodeInitramfsPath, "initrd-path", helpers.ArtifactPath(constants.InitramfsAssetWithArch), "initramfs image to use")
 	createCmd.Flags().StringVar(&nodeDiskImagePath, "disk-image-path", "", "disk image to use")
 	createCmd.Flags().StringVar(&nodeIPXEBootScript, "ipxe-boot-script", "", "iPXE boot script (URL) to use")
@@ -1136,6 +1268,9 @@ func init() {
 	createCmd.Flags().BoolVar(&bootloaderEnabled, bootloaderEnabledFlag, true, "enable bootloader to load kernel and initramfs from disk image after install")
 	createCmd.Flags().BoolVar(&uefiEnabled, "with-uefi", true, "enable UEFI on x86_64 architecture")
 	createCmd.Flags().BoolVar(&tpm2Enabled, tpm2EnabledFlag, false, "enable TPM2 emulation support using swtpm")
+	createCmd.Flags().BoolVar(&debugShellEnabled, withDebugShellFlag, false, "drop talos into a maintenance shell on boot, this is for advanced debugging for developers only")
+	createCmd.Flags().BoolVar(&withIOMMU, withIOMMUFlag, false, "enable IOMMU support, this also add a new PCI root port and an interface attached to it (qemu only)")
+	createCmd.Flags().MarkHidden("with-debug-shell") //nolint:errcheck
 	createCmd.Flags().StringSliceVar(&extraUEFISearchPaths, "extra-uefi-search-paths", []string{}, "additional search paths for UEFI firmware (only applies when UEFI is enabled)")
 	createCmd.Flags().StringSliceVar(&registryMirrors, registryMirrorFlag, []string{}, "list of registry mirrors to use in format: <registry host>=<mirror URL>")
 	createCmd.Flags().StringSliceVar(&registryInsecure, registryInsecureFlag, []string{}, "list of registry hostnames to skip TLS verification for")
@@ -1156,6 +1291,7 @@ func init() {
 	createCmd.Flags().IntVar(&controlPlaneMemory, "memory", 2048, "the limit on memory usage in MB (each control plane/VM)")
 	createCmd.Flags().IntVar(&workersMemory, "memory-workers", 2048, "the limit on memory usage in MB (each worker/VM)")
 	createCmd.Flags().IntVar(&clusterDiskSize, clusterDiskSizeFlag, 6*1024, "default limit on disk size in MB (each VM)")
+	createCmd.Flags().UintVar(&diskBlockSize, "disk-block-size", 512, "disk block size (VM only)")
 	createCmd.Flags().BoolVar(&clusterDiskPreallocate, clusterDiskPreallocateFlag, true, "whether disk space should be preallocated")
 	createCmd.Flags().StringSliceVar(&clusterDisks, clusterDisksFlag, []string{}, "list of disks to create for each VM in format: <mount_point1>:<size1>:<mount_point2>:<size2>")
 	createCmd.Flags().IntVar(&extraDisks, "extra-disks", 0, "number of extra disks to create for each worker VM")
@@ -1183,7 +1319,6 @@ func init() {
 	createCmd.Flags().BoolVar(&withInitNode, "with-init-node", false, "create the cluster with an init node")
 	createCmd.Flags().StringVar(&customCNIUrl, customCNIUrlFlag, "", "install custom CNI from the URL (Talos cluster)")
 	createCmd.Flags().StringVar(&dnsDomain, dnsDomainFlag, "cluster.local", "the dns domain to use for cluster")
-	createCmd.Flags().BoolVar(&crashdumpOnFailure, "crashdump", false, "print debug crashdump to stderr when cluster startup fails")
 	createCmd.Flags().BoolVar(&skipKubeconfig, "skip-kubeconfig", false, "skip merging kubeconfig from the created cluster")
 	createCmd.Flags().BoolVar(&skipInjectingConfig, "skip-injecting-config", false, "skip injecting config from embedded metadata server, write config files to current directory")
 	createCmd.Flags().BoolVar(&encryptStatePartition, encryptStatePartitionFlag, false, "enable state partition encryption")
@@ -1202,7 +1337,7 @@ func init() {
 	createCmd.Flags().IntVar(&controlPlanePort, controlPlanePortFlag, constants.DefaultControlPlanePort, "control plane port (load balancer and local API port, QEMU only)")
 	createCmd.Flags().IntVar(&kubePrismPort, kubePrismFlag, constants.DefaultKubePrismPort, "KubePrism port (set to 0 to disable)")
 	createCmd.Flags().BoolVar(&dhcpSkipHostname, "disable-dhcp-hostname", false, "skip announcing hostname via DHCP (QEMU only)")
-	createCmd.Flags().BoolVar(&skipBootPhaseFinishedCheck, "skip-boot-phase-finished-check", false, "skip waiting for node to finish boot phase")
+	createCmd.Flags().BoolVar(&skipK8sNodeReadinessCheck, "skip-k8s-node-readiness-check", false, "skip k8s node readiness checks")
 	createCmd.Flags().BoolVar(&networkChaos, "with-network-chaos", false, "enable to use network chaos parameters when creating a qemu cluster")
 	createCmd.Flags().DurationVar(&jitter, "with-network-jitter", 0, "specify jitter on the bridge interface when creating a qemu cluster")
 	createCmd.Flags().DurationVar(&latency, "with-network-latency", 0, "specify latency on the bridge interface when creating a qemu cluster")
@@ -1215,6 +1350,9 @@ func init() {
 	createCmd.Flags().StringVar(&withFirewall, firewallFlag, "", "inject firewall rules into the cluster, value is default policy - accept/block (QEMU only)")
 	createCmd.Flags().BoolVar(&withUUIDHostnames, "with-uuid-hostnames", false, "use machine UUIDs as default hostnames (QEMU only)")
 	createCmd.Flags().Var(&withSiderolinkAgent, "with-siderolink", "enables the use of siderolink agent as configuration apply mechanism. `true` or `wireguard` enables the agent, `tunnel` enables the agent with grpc tunneling") //nolint:lll
+	createCmd.Flags().BoolVar(&withJSONLogs, "with-json-logs", false, "enable JSON logs receiver and configure Talos to send logs there")
+	createCmd.Flags().StringVar(&configInjectionMethodFlag, "config-injection-method", "", "a method to inject machine config: default is HTTP server, 'metal-iso' to mount an ISO (QEMU only)")
+	createCmd.Flags().Var(&mountOpts, "mount", "attach a mount to the container (Docker only)")
 
 	createCmd.MarkFlagsMutuallyExclusive(inputDirFlag, nodeInstallImageFlag)
 	createCmd.MarkFlagsMutuallyExclusive(inputDirFlag, configDebugFlag)
@@ -1234,7 +1372,7 @@ func init() {
 	Cmd.AddCommand(createCmd)
 }
 
-func newSiderolinkBuilder(wgHost string) (*siderolinkBuilder, error) {
+func newSiderolinkBuilder(wgHost string, useTLS bool) (*siderolinkBuilder, error) {
 	prefix, err := networkPrefix("")
 	if err != nil {
 		return nil, err
@@ -1245,6 +1383,16 @@ func newSiderolinkBuilder(wgHost string) (*siderolinkBuilder, error) {
 		binds:        map[uuid.UUID]netip.Addr{},
 		prefix:       prefix,
 		nodeIPv6Addr: prefix.Addr().Next().String(),
+	}
+
+	if useTLS {
+		ca, err := x509.NewSelfSignedCertificateAuthority(x509.ECDSA(true), x509.IPAddresses([]net.IP{net.ParseIP(wgHost)}))
+		if err != nil {
+			return nil, err
+		}
+
+		result.apiCert = ca.CrtPEM
+		result.apiKey = ca.KeyPEM
 	}
 
 	var resultErr error
@@ -1291,6 +1439,9 @@ type siderolinkBuilder struct {
 	apiPort      int
 	sinkPort     int
 	logPort      int
+
+	apiCert []byte
+	apiKey  []byte
 }
 
 // DefineIPv6ForUUID defines an IPv6 address for a given UUID. It is safe to call this method on a nil pointer.
@@ -1319,6 +1470,8 @@ func (slb *siderolinkBuilder) SiderolinkRequest() provision.SiderolinkRequest {
 	return provision.SiderolinkRequest{
 		WireguardEndpoint: net.JoinHostPort(slb.wgHost, strconv.Itoa(slb.wgPort)),
 		APIEndpoint:       ":" + strconv.Itoa(slb.apiPort),
+		APICertificate:    slb.apiCert,
+		APIKey:            slb.apiKey,
 		SinkEndpoint:      ":" + strconv.Itoa(slb.sinkPort),
 		LogEndpoint:       ":" + strconv.Itoa(slb.logPort),
 		SiderolinkBind: maps.ToSlice(slb.binds, func(k uuid.UUID, v netip.Addr) provision.SiderolinkBind {
@@ -1328,6 +1481,24 @@ func (slb *siderolinkBuilder) SiderolinkRequest() provision.SiderolinkRequest {
 			}
 		}),
 	}
+}
+
+// TrustedRootsConfig returns the trusted roots config for the current builder.
+func (slb *siderolinkBuilder) TrustedRootsConfig() []byte {
+	if slb == nil || slb.apiCert == nil {
+		return nil
+	}
+
+	trustedRootsConfig := security.NewTrustedRootsConfigV1Alpha1()
+	trustedRootsConfig.MetaName = "siderolink-ca"
+	trustedRootsConfig.Certificates = string(slb.apiCert)
+
+	marshaled, err := encoder.NewEncoder(trustedRootsConfig, encoder.WithComments(encoder.CommentsDisabled)).Encode()
+	if err != nil {
+		panic(fmt.Sprintf("failed to marshal trusted roots config: %s", err))
+	}
+
+	return marshaled
 }
 
 // SetKernelArgs sets the kernel arguments for the current builder. It is safe to call this method on a nil pointer.
@@ -1340,7 +1511,13 @@ func (slb *siderolinkBuilder) SetKernelArgs(extraKernelArgs *procfs.Cmdline, tun
 		extraKernelArgs.Get("talos.logging.kernel") != nil:
 		return errors.New("siderolink kernel arguments are already set, cannot run with --with-siderolink")
 	default:
-		apiLink := "grpc://" + net.JoinHostPort(slb.wgHost, strconv.Itoa(slb.apiPort)) + "?jointoken=foo"
+		scheme := "grpc://"
+
+		if slb.apiCert != nil {
+			scheme = "https://"
+		}
+
+		apiLink := scheme + net.JoinHostPort(slb.wgHost, strconv.Itoa(slb.apiPort)) + "?jointoken=foo"
 
 		if tunnel {
 			apiLink += "&grpc_tunnel=true"
@@ -1349,6 +1526,26 @@ func (slb *siderolinkBuilder) SetKernelArgs(extraKernelArgs *procfs.Cmdline, tun
 		extraKernelArgs.Append("siderolink.api", apiLink)
 		extraKernelArgs.Append("talos.events.sink", net.JoinHostPort(slb.nodeIPv6Addr, strconv.Itoa(slb.sinkPort)))
 		extraKernelArgs.Append("talos.logging.kernel", "tcp://"+net.JoinHostPort(slb.nodeIPv6Addr, strconv.Itoa(slb.logPort)))
+
+		if trustedRootsConfig := slb.TrustedRootsConfig(); trustedRootsConfig != nil {
+			var buf bytes.Buffer
+
+			zencoder, err := zstd.NewWriter(&buf)
+			if err != nil {
+				return fmt.Errorf("failed to create zstd encoder: %w", err)
+			}
+
+			_, err = zencoder.Write(trustedRootsConfig)
+			if err != nil {
+				return fmt.Errorf("failed to write zstd data: %w", err)
+			}
+
+			if err = zencoder.Close(); err != nil {
+				return fmt.Errorf("failed to close zstd encoder: %w", err)
+			}
+
+			extraKernelArgs.Append(constants.KernelParamConfigInline, base64.StdEncoding.EncodeToString(buf.Bytes()))
+		}
 
 		return nil
 	}
@@ -1423,6 +1620,10 @@ func (a *agentFlag) String() string {
 		return "wireguard"
 	case 2:
 		return "grpc-tunnel"
+	case 3:
+		return "wireguard+tls"
+	case 4:
+		return "grpc-tunnel+tls"
 	default:
 		return "none"
 	}
@@ -1434,8 +1635,12 @@ func (a *agentFlag) Set(s string) error {
 		*a = 1
 	case "tunnel":
 		*a = 2
+	case "wireguard+tls":
+		*a = 3
+	case "grpc-tunnel+tls":
+		*a = 4
 	default:
-		return fmt.Errorf("unknown type: %s, possible values: 'true', 'wireguard' for the usual WG; 'tunnel' for WG over GRPC", s)
+		return fmt.Errorf("unknown type: %s, possible values: 'true', 'wireguard' for the usual WG; 'tunnel' for WG over GRPC, add '+tls' to enable TLS for API", s)
 	}
 
 	return nil
@@ -1443,4 +1648,5 @@ func (a *agentFlag) Set(s string) error {
 
 func (a *agentFlag) Type() string    { return "agent" }
 func (a *agentFlag) IsEnabled() bool { return *a != 0 }
-func (a *agentFlag) IsTunnel() bool  { return *a == 2 }
+func (a *agentFlag) IsTunnel() bool  { return *a == 2 || *a == 4 }
+func (a *agentFlag) IsTLS() bool     { return *a == 3 || *a == 4 }
